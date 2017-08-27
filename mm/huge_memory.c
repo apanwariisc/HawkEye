@@ -19,6 +19,7 @@
 #include <linux/dax.h>
 #include <linux/kthread.h>
 #include <linux/khugepaged.h>
+#include <linux/ohp.h>
 #include <linux/freezer.h>
 #include <linux/mman.h>
 #include <linux/pagemap.h>
@@ -819,6 +820,9 @@ int do_huge_pmd_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		return VM_FAULT_OOM;
 	if (unlikely(khugepaged_enter(vma, vma->vm_flags)))
 		return VM_FAULT_OOM;
+	if (unlikely(ohp_enter(vma, address, vma->vm_flags)))
+		return VM_FAULT_OOM;
+
 	if (!(flags & FAULT_FLAG_WRITE) && !mm_forbids_zeropage(mm) &&
 			transparent_hugepage_use_zero_page()) {
 		spinlock_t *ptl;
