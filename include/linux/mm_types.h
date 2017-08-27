@@ -367,6 +367,24 @@ struct mm_rss_stat {
 };
 
 struct kioctx_table;
+
+/*
+ * Basic declarations for opportunistic huge page
+ * framework.
+ */
+#define MAX_BINS	10
+
+struct ohp_addr {
+	unsigned long address;
+	struct mm_struct *mm;
+	struct list_head entry;
+};
+
+struct ohp {
+	struct list_head	priority[MAX_BINS];
+	unsigned long		count[MAX_BINS];
+};
+
 struct mm_struct {
 	struct vm_area_struct *mmap;		/* list of VMAs */
 	struct rb_root mm_rb;
@@ -486,6 +504,8 @@ struct mm_struct {
 	/* address of the bounds directory */
 	void __user *bd_addr;
 #endif
+	struct list_head ohp_list;
+	struct ohp ohp;
 };
 
 static inline void mm_init_cpumask(struct mm_struct *mm)
