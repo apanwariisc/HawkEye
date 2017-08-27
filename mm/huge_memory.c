@@ -2752,6 +2752,80 @@ static void collect_mm_slot(struct mm_slot *mm_slot)
 	}
 }
 
+/*
+ * This is parallel to khugepage_scan_mm_slot but selects
+ * pages to be promoted from opportunistice huge page framework.
+ * Make sure it does not affect the correctness and we release
+ * all khugepaged resources when a process exits.
+ * Ideally, khugepaged should be completely replaced by ohp.
+ */
+static unsigned int ohp_scan_mm(unsigned int pages,
+					    struct page **hpage)
+{
+	struct mm_struct *mm = NULL;
+	struct vm_area_struct *vma;
+	unsigned long address;
+	int progress = 0, failed = 0, ret;
+
+	VM_BUG_ON(!pages);
+
+	/*
+	 * Each iteration will acquire and release the mmap semaphore
+	 * independently. This may look messy but keeps the code simple.
+	 */
+	while (progress < pages && failed < 3) {
+		address = get_next_ohp_addr(&mm);
+		if (!mm) {
+			printk(KERN_INFO"Unable to find mm to promote\n");
+			failed += 1;
+			continue;
+		}
+
+		down_read(&mm->mmap_sem);
+		if (unlikely(khugepaged_test_exit(mm)))
+			vma = NULL;
+		else
+		vma = find_vma(mm, address);
+
+		if (!vma) {
+			failed += 1;
+			up_read(&mm->mmap_sem);
+			continue;
+		}
+
+		if (!(address >= vma->vm_start && address < vma->vm_end)) {
+			failed += 1;
+			up_read(&mm->mmap_sem);
+			continue;
+		}
+
+		if (!hugepage_vma_check(vma)) {
+			failed += 1;
+			up_read(&mm->mmap_sem);
+			continue;
+		}
+
+		printk(KERN_INFO"Selecting %s to promote", mm->owner->comm);
+		/* Check for alignment. */
+		VM_BUG_ON(address & ~HPAGE_PMD_MASK);
+
+		/* promote into a huge page. */
+		ret = khugepaged_scan_pmd(mm, vma, address, hpage);
+
+		/* mmap sem already released. */
+		if (ret)
+			progress += HPAGE_PMD_NR;
+		else {
+			failed += 1;
+			/* release and require */
+			up_read(&mm->mmap_sem);
+		}
+	}
+
+	return progress;
+}
+
+#if 0
 static unsigned int khugepaged_scan_mm_slot(unsigned int pages,
 					    struct page **hpage)
 	__releases(&khugepaged_mm_lock)
@@ -2859,6 +2933,7 @@ breakouterloop_mmap_sem:
 
 	return progress;
 }
+#endif
 
 static int khugepaged_has_work(void)
 {
@@ -2893,10 +2968,13 @@ static void khugepaged_do_scan(void)
 		spin_lock(&khugepaged_mm_lock);
 		if (!khugepaged_scan.mm_slot)
 			pass_through_head++;
-		if (khugepaged_has_work() &&
-		    pass_through_head < 2)
+		if (khugepaged_has_work() && pass_through_head < 2) {
+			progress += ohp_scan_mm(pages-progress, &hpage);
+			/*
 			progress += khugepaged_scan_mm_slot(pages - progress,
 							    &hpage);
+			*/
+		}
 		else
 			progress = pages;
 		spin_unlock(&khugepaged_mm_lock);
