@@ -827,6 +827,8 @@ asmlinkage long sys_syncfs(int fd);
 
 asmlinkage long sys_fork(void);
 asmlinkage long sys_vfork(void);
+asmlinkage long update_mm_ohp_stats(unsigned int pid, unsigned int value);
+
 #ifdef CONFIG_CLONE_BACKWARDS
 asmlinkage long sys_clone(unsigned long, unsigned long, int __user *, unsigned long,
 	       int __user *);

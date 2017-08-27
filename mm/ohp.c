@@ -250,3 +250,58 @@ long count_ohp_bins(struct mm_struct *mm)
 	return count;
 }
 EXPORT_SYMBOL(count_ohp_bins);
+
+/*
+ * We decide the action to be taken using value, as per the
+ * following rules -
+ * 1000 -   The process has just started and needs to be added to
+ *          the queue for monitoring its huge pages.
+ * 1001 -   The process has finished and hence it is safe to remove
+ *          from the list. Make sure to drop reference to any of task
+ *          members.
+ * Others - All other values denote a legitimate sensitivity for
+ *          the process. It must be between 0 and 100.
+ */
+SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
+{
+	struct task_struct *task;
+	struct pid *pid_struct;
+	//struct mm_struct *mm;
+
+	pid_struct = find_get_pid(pid);
+	if (!pid_struct) {
+		printk(KERN_INFO"Invalid pid: %d\n", pid);
+		return -EINVAL;
+	}
+
+	task = pid_task(pid_struct, PIDTYPE_PID);
+	if (!task) {
+		printk(KERN_INFO"Unable to retrieve task for pid: %d\n", pid);
+		return -EINVAL;
+	}
+
+	if (value == OHP_TASK_ENTER) {
+		ohp_add_task(task);
+		printk(KERN_INFO"Added pid: %d %s to scan list\n",
+						pid, task->comm);
+		return 0;
+	}
+
+	if (value == OHP_TASK_EXIT) {
+		ohp_exit_task(task);
+		printk(KERN_INFO"Removed pid: %d %s from scan list\n",
+						pid, task->comm);
+		return 0;
+	}
+
+	/*
+	 * Verify the validity of the sensitivity value.
+	 */
+	if (value > 100)
+		return -EINVAL;
+	/*
+	 * We should reach here only if the process is already present
+	 * in ohp list.
+	 */
+	return 0;
+}
