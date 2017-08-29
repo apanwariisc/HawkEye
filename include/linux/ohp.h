@@ -6,6 +6,8 @@ extern void init_mm_ohp_bins(struct mm_struct *mm);
 extern void remove_ohp_bins(struct vm_area_struct *vma);
 extern int add_ohp_bin(struct mm_struct *mm, unsigned long addr);
 extern unsigned long get_next_ohp_addr(struct mm_struct **mm_struct);
+int start_kbinmanager(void);
+void stop_kbinmanager(void);
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 static inline int ohp_enter(struct vm_area_struct *vma,

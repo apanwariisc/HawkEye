@@ -12,9 +12,17 @@
 #include <linux/syscalls.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
+#include <linux/freezer.h>
+#include <linux/kthread.h>
+#include <linux/khugepaged.h>
+#include <linux/ohp.h>
 
 /* To protect ohp maintenance list */
 DEFINE_SPINLOCK(ohp_mm_lock);
+
+static struct task_struct *kbinmanager_thread __read_mostly;
+static unsigned int kbinmanager_scan_sleep_msecs = 10000;
+static DECLARE_WAIT_QUEUE_HEAD(kbinmanager_wait);
 
 /*
  * List of mm structs to be processed for huge page promotion.
@@ -50,6 +58,7 @@ static inline int ohp_add_task(struct task_struct *task)
 	spin_lock(&ohp_mm_lock);
 	list_add_tail(&mm->ohp_list, &ohp_scan.mm_head);
 	spin_unlock(&ohp_mm_lock);
+	start_kbinmanager();
 	mmput(mm);
 	return 0;
 }
@@ -304,4 +313,69 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 	 * in ohp list.
 	 */
 	return 0;
+}
+
+static void kbinmanager_do_scan(void)
+{
+	static unsigned long iteration = 0;
+
+	printk(KERN_INFO"kbinmanager starting scan: %ld\n", iteration);
+	iteration += 1;
+}
+
+static void kbinmanager_wait_work(void)
+{
+	/* put to sleep for a certain period */
+	wait_event_freezable_timeout(kbinmanager_wait, kthread_should_stop(),
+			msecs_to_jiffies(kbinmanager_scan_sleep_msecs));
+	return;
+}
+
+/*
+ * Kernel thread that opportunistically scans process
+ * address space to get a measure of its working set.
+ */
+static int kbinmanager(void *none)
+{
+	set_freezable();
+	set_user_nice(current, MAX_NICE);
+
+	while (!kthread_should_stop()) {
+		kbinmanager_do_scan();
+		kbinmanager_wait_work();
+	}
+
+	return 0;
+}
+
+int start_kbinmanager(void)
+{
+	int err=  0;
+
+	/*
+	 * Check if the thread is not active already. Start if it is not.
+	 */
+	if (khugepaged_enabled()) {
+		if (!kbinmanager_thread) {
+			kbinmanager_thread = kthread_run(kbinmanager, NULL,
+								"kbinmanager");
+			if (unlikely(IS_ERR(kbinmanager_thread))) {
+				pr_err("kbinmanager thread failed to start\n");
+				err = PTR_ERR(kbinmanager_thread);
+				kbinmanager_thread = NULL;
+				goto fail;
+			}
+			printk(KERN_INFO"kbinmanager thread started\n");
+		}
+	}
+fail:
+	return err;
+}
+
+void stop_kbinmanager(void)
+{
+	if (kbinmanager_thread) {
+		kthread_stop(kbinmanager_thread);
+		kbinmanager_thread = NULL;
+	}
 }
