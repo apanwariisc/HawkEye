@@ -2776,7 +2776,9 @@ static unsigned int ohp_scan_mm(unsigned int pages,
 	while (progress < pages && failed < 3) {
 		address = get_next_ohp_addr(&mm);
 		if (!mm) {
-			printk(KERN_INFO"Unable to find mm to promote\n");
+			/*
+			trace_printk("Unable to find mm to promote\n");
+			*/
 			failed += 1;
 			continue;
 		}

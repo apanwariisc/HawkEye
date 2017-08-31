@@ -25,6 +25,14 @@ static unsigned int kbinmanager_scan_sleep_msecs = 10000;
 static DECLARE_WAIT_QUEUE_HEAD(kbinmanager_wait);
 
 /*
+ * This exists for testing purpose as of now.
+ * It tells how many huge pages are still to be promoted.
+ * We always update it with ohp_mm_lock held.
+ * Hence, no need for separate synchronization for this.
+ */
+unsigned long nr_ohp_bins = 0;
+
+/*
  * List of mm structs to be processed for huge page promotion.
  */
 struct ohp_scan {
@@ -141,7 +149,7 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	spin_lock(&ohp_mm_lock);
 
 	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
-		for (i = MAX_BINS-1; i >= 0 ; i--) {
+		for (i = MAX_BINS-1; i >= 0; i--) {
 				if (list_empty(&mm->ohp.priority[i]))
 					continue;
 				goto found;
@@ -163,8 +171,11 @@ found:
 	list_del(&kaddr->entry);
 	kfree(kaddr);
 	mm->ohp.count[i] -= 1;
+	nr_ohp_bins -= 1;
 	spin_unlock(&ohp_mm_lock);
-	printk(KERN_INFO"Found mm address to promote\n");
+	/*
+	trace_printk(KERN_INFO"Found mm address to promote\n");
+	*/
 	return address;
 }
 
@@ -190,6 +201,7 @@ void remove_ohp_bins(struct vm_area_struct *vma)
 				spin_lock(&ohp_mm_lock);
 				list_del(&kaddr->entry);
 				mm->ohp.count[i] -= 1;
+				nr_ohp_bins -= 1;
 				kfree(kaddr);
 				spin_unlock(&ohp_mm_lock);
 			}
@@ -233,6 +245,7 @@ int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 	spin_lock(&ohp_mm_lock);
 	list_add_tail(&kaddr->entry, &mm->ohp.priority[0]);
 	mm->ohp.count[0] += 1;
+	nr_ohp_bins += 1;
 	spin_unlock(&ohp_mm_lock);
 	return 0;
 }
@@ -267,7 +280,8 @@ EXPORT_SYMBOL(count_ohp_bins);
  *          the queue for monitoring its huge pages.
  * 1001 -   The process has finished and hence it is safe to remove
  *          from the list. Make sure to drop reference to any of task
- *          members.
+ *          members. Ideally, this should not be required as we take care
+ *          of this case at the time of mmexit.
  * Others - All other values denote a legitimate sensitivity for
  *          the process. It must be between 0 and 100.
  */
@@ -275,7 +289,7 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 {
 	struct task_struct *task;
 	struct pid *pid_struct;
-	//struct mm_struct *mm;
+	long ret = 0;
 
 	pid_struct = find_get_pid(pid);
 	if (!pid_struct) {
@@ -289,37 +303,39 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 		return -EINVAL;
 	}
 
+	//task_lock(task);
 	if (value == OHP_TASK_ENTER) {
 		ohp_add_task(task);
 		printk(KERN_INFO"Added pid: %d %s to scan list\n",
 						pid, task->comm);
-		return 0;
+		goto exit_success;
 	}
 
 	if (value == OHP_TASK_EXIT) {
 		ohp_exit_task(task);
 		printk(KERN_INFO"Removed pid: %d %s from scan list\n",
 						pid, task->comm);
-		return 0;
+		goto exit_success;
 	}
-
 	/*
 	 * Verify the validity of the sensitivity value.
+	 * Valid range is only from 0 - 100.
+	 * We can't simply return from here as the task is locked.
 	 */
 	if (value > 100)
-		return -EINVAL;
-	/*
-	 * We should reach here only if the process is already present
-	 * in ohp list.
-	 */
-	return 0;
+		ret = -EINVAL;
+
+exit_success:
+	//task_unlock(task);
+	return ret;
 }
 
 static void kbinmanager_do_scan(void)
 {
 	static unsigned long iteration = 0;
 
-	printk(KERN_INFO"kbinmanager starting scan: %ld\n", iteration);
+	printk(KERN_INFO"kbinmanager scan: %ld Promotions Left: %ld\n",
+					iteration, nr_ohp_bins);
 	iteration += 1;
 }
 

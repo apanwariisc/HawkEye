@@ -13,14 +13,18 @@ void stop_kbinmanager(void);
 static inline int ohp_enter(struct vm_area_struct *vma,
 				unsigned long address, unsigned long vm_flags)
 {
-	if (!test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags)) {
-		if ((khugepaged_always() ||
-		     (khugepaged_req_madv() && (vm_flags & VM_HUGEPAGE))) &&
-		    !(vm_flags & VM_NOHUGEPAGE)) {
-			if (add_ohp_bin(vma->vm_mm, address))
-				return -ENOMEM;
-		}
+	//if (!test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags)) {
+	/*
+	 * khugepaged_enter sets the above flag. Hence, we need to skip this
+	 * to add the current address to ohp_bins.
+	 */
+	if ((khugepaged_always() ||
+	     (khugepaged_req_madv() && (vm_flags & VM_HUGEPAGE))) &&
+	    !(vm_flags & VM_NOHUGEPAGE)) {
+		if (add_ohp_bin(vma->vm_mm, address))
+			return -ENOMEM;
 	}
+	//}
 	return 0;
 }
 #else
