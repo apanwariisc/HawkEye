@@ -311,6 +311,7 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 {
 	struct task_struct *task;
 	struct pid *pid_struct;
+	struct mm_struct *mm;
 	long ret = 0;
 
 	pid_struct = find_get_pid(pid);
@@ -345,7 +346,14 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 	 * We can't simply return from here as the task is locked.
 	 */
 	if (value > 100)
-		ret = -EINVAL;
+		return -EINVAL;
+
+	mm = get_task_mm(task);
+	if (!mm)
+		return -EINVAL;
+
+	mm->ohp.ohp_weight = value;
+	mmput(mm);
 
 exit_success:
 	//task_unlock(task);
