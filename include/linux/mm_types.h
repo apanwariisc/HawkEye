@@ -383,6 +383,7 @@ struct ohp_addr {
 struct ohp {
 	struct list_head	priority[MAX_BINS];
 	unsigned long		count[MAX_BINS];
+	unsigned int		ohp_weight;
 };
 
 struct mm_struct {

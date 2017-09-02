@@ -136,6 +136,25 @@ void init_mm_ohp_bins(struct mm_struct *mm)
 }
 
 /*
+ * Traverse through the list of all processes currently
+ * participating in ohp framework and select the process
+ * with the highest weight.
+ */
+struct mm_struct *ohp_get_suitable_mm(void)
+{
+	struct mm_struct *mm, *best_mm = NULL;
+	unsigned int best_weight = 0;
+
+	spin_lock(&ohp_mm_lock);
+	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
+		if (mm->ohp.ohp_weight > best_weight)
+			best_mm = mm;
+	}
+	spin_unlock(&ohp_mm_lock);
+	return best_mm;
+}
+
+/*
  * Get the next huge page candidate.
  */
 unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
@@ -146,14 +165,17 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	int i;
 
 	*mm_src = NULL;
-	spin_lock(&ohp_mm_lock);
+	/* select the best process first.*/
+	mm = ohp_get_suitable_mm();
+	if (!mm)
+		return address;
 
-	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
-		for (i = MAX_BINS-1; i >= 0; i--) {
-				if (list_empty(&mm->ohp.priority[i]))
-					continue;
-				goto found;
-		}
+	spin_lock(&ohp_mm_lock);
+	for (i = MAX_BINS-1; i >= 0; i--) {
+		if (list_empty(&mm->ohp.priority[i]))
+			continue;
+		/* If we are here, we have found the next ohp candidate. */
+		goto found;
 	}
 	spin_unlock(&ohp_mm_lock);
 	return address;
