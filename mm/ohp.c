@@ -139,10 +139,22 @@ void init_mm_ohp_bins(struct mm_struct *mm)
 {
 	int i;
 
+	/* We perhaps do not need locking here as the process
+	 * is just getting initialized.
+	 */
 	for (i=0; i<MAX_BINS; i++) {
 		INIT_LIST_HEAD(&mm->ohp.priority[i]);
 		mm->ohp.count[i] = 0;
+		mm->ohp.ohp_remaining = 0;
 	}
+}
+
+static inline unsigned long mm_ohp_weight(struct mm_struct *mm)
+{
+	if (mm->ohp.ohp_remaining)
+		return ((mm->ohp.ohp_weight * 10000) / mm->ohp.ohp_remaining);
+
+	return 0;
 }
 
 /*
@@ -153,12 +165,17 @@ void init_mm_ohp_bins(struct mm_struct *mm)
 struct mm_struct *ohp_get_suitable_mm(void)
 {
 	struct mm_struct *mm, *best_mm = NULL;
-	unsigned int best_weight = 0;
+	unsigned long weight, best_weight = 0;
 
 	spin_lock(&ohp_mm_lock);
 	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
-		if (mm->ohp.ohp_weight > best_weight)
+		down_read(&mm->mmap_sem);
+		weight = mm_ohp_weight(mm);
+		up_read(&mm->mmap_sem);
+		if (weight > best_weight) {
 			best_mm = mm;
+			best_weight = weight;
+		}
 	}
 	spin_unlock(&ohp_mm_lock);
 	return best_mm;
@@ -202,7 +219,10 @@ found:
 	 */
 	list_del(&kaddr->entry);
 	kfree(kaddr);
+	down_write(&mm->mmap_sem);
 	mm->ohp.count[i] -= 1;
+	mm->ohp.ohp_remaining -= 1;
+	up_write(&mm->mmap_sem);
 	nr_ohp_bins -= 1;
 	spin_unlock(&ohp_mm_lock);
 	/*
@@ -232,7 +252,10 @@ void remove_ohp_bins(struct vm_area_struct *vma)
 				kaddr->address <= vma->vm_end) {
 				spin_lock(&ohp_mm_lock);
 				list_del(&kaddr->entry);
+				down_write(&mm->mmap_sem);
 				mm->ohp.count[i] -= 1;
+				mm->ohp.ohp_remaining -= 1;
+				up_write(&mm->mmap_sem);
 				nr_ohp_bins -= 1;
 				kfree(kaddr);
 				spin_unlock(&ohp_mm_lock);
@@ -276,7 +299,10 @@ int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 
 	spin_lock(&ohp_mm_lock);
 	list_add_tail(&kaddr->entry, &mm->ohp.priority[0]);
+	down_write(&mm->mmap_sem);
 	mm->ohp.count[0] += 1;
+	mm->ohp.ohp_remaining += 1;
+	up_write(&mm->mmap_sem);
 	nr_ohp_bins += 1;
 	spin_unlock(&ohp_mm_lock);
 	return 0;
@@ -362,7 +388,13 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 	if (!mm)
 		return -EINVAL;
 
-	mm->ohp.ohp_weight = value;
+	/*
+	 * We keep weight as the exponential moving average to reduce
+	 * the probability of noisy updates. Low priority is given to
+	 * current value as we favor processes that have high TLB
+	 * overheads for long periods.
+	 */
+	mm->ohp.ohp_weight = (8 * mm->ohp.ohp_weight + 2 * value)/10;
 	mmput(mm);
 
 exit_success:
