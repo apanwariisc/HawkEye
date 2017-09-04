@@ -818,8 +818,10 @@ int do_huge_pmd_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		return VM_FAULT_FALLBACK;
 	if (unlikely(anon_vma_prepare(vma)))
 		return VM_FAULT_OOM;
+#if 0
 	if (unlikely(khugepaged_enter(vma, vma->vm_flags)))
 		return VM_FAULT_OOM;
+#endif
 	if (unlikely(ohp_enter(vma, address, vma->vm_flags)))
 		return VM_FAULT_OOM;
 
@@ -2807,7 +2809,6 @@ static unsigned int ohp_scan_mm(unsigned int pages,
 			continue;
 		}
 
-		printk(KERN_INFO"Selecting %s to promote", mm->owner->comm);
 		/* Check for alignment. */
 		VM_BUG_ON(address & ~HPAGE_PMD_MASK);
 
@@ -2937,10 +2938,17 @@ breakouterloop_mmap_sem:
 }
 #endif
 
+#if 0
 static int khugepaged_has_work(void)
 {
 	return !list_empty(&khugepaged_scan.mm_head) &&
 		khugepaged_enabled();
+}
+#endif
+
+static int khugepaged_has_work(void)
+{
+	return ohp_has_work();
 }
 
 static int khugepaged_wait_event(void)

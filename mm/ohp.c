@@ -45,7 +45,10 @@ struct ohp_scan ohp_scan = {
 
 bool ohp_has_work(void)
 {
+	/*
 	return !list_empty(&ohp_scan.mm_head);
+	*/
+	return !(!nr_ohp_bins);
 }
 
 #define OHP_TASK_ENTER	1000
@@ -65,7 +68,11 @@ static inline int ohp_add_task(struct task_struct *task)
 
 	spin_lock(&ohp_mm_lock);
 	list_add_tail(&mm->ohp_list, &ohp_scan.mm_head);
+	atomic_inc(&mm->mm_count);
 	spin_unlock(&ohp_mm_lock);
+	/*
+	 * kbinmanager may not have been started yet.
+	 */
 	start_kbinmanager();
 	mmput(mm);
 	return 0;
@@ -83,6 +90,7 @@ static inline void ohp_add_mm(struct mm_struct *mm)
 			goto out;
 
 	list_add_tail(&mm->ohp_list, &ohp_scan.mm_head);
+	atomic_inc(&mm->mm_count);
 out:
 	spin_unlock(&ohp_mm_lock);
 	return;
@@ -99,6 +107,7 @@ static inline int ohp_exit_task(struct task_struct *task)
 
 	spin_lock(&ohp_mm_lock);
 	list_del(&mm->ohp_list);
+	mmdrop(mm);
 	spin_unlock(&ohp_mm_lock);
 	mmput(mm);
 	return 0;
@@ -113,6 +122,7 @@ void ohp_exit_mm(struct mm_struct *mm_src)
 					ohp_list) {
 		if (mm == mm_src) {
 			list_del(&mm->ohp_list);
+			mmdrop(mm);
 			break;
 		}
 	}

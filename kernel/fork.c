@@ -699,7 +699,9 @@ void mmput(struct mm_struct *mm)
 		uprobe_clear_state(mm);
 		exit_aio(mm);
 		ksm_exit(mm);
+#if 0
 		khugepaged_exit(mm); /* must run before exit_mmap */
+#endif
 		ohp_exit_mm(mm);
 		exit_mmap(mm);
 		set_mm_exe_file(mm, NULL);
