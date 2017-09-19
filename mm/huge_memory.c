@@ -3010,6 +3010,11 @@ static void khugepaged_wait_work(void)
 		wait_event_freezable(khugepaged_wait, khugepaged_wait_event());
 }
 
+/*
+ * After clearing the page table accessed bit, we give some time
+ * to the application to access the pages. Ideally, this should not
+ * be too big.
+ */
 static void ohp_wait_scan_period(void)
 {
 	wait_event_freezable_timeout(khugepaged_wait,
@@ -3026,17 +3031,21 @@ static int khugepaged(void *none)
 	set_user_nice(current, MAX_NICE);
 
 	while (!kthread_should_stop()) {
-#if 0
 		/* select target mm */
 		mm = ohp_get_target_mm();
 		if (!mm)
+
 			goto do_wait;
 
+		/*
+		 * Check if high priority promotions are pending.
+		 * If yes, we can simply skip scanning for now and
+		 * promote the pending promotions first.
+		 */
 		if (!list_empty(&mm->ohp.priority[MAX_BINS-1]))
 			goto do_scan;
 
 		printk(KERN_INFO"khugepaged doing scan\n");
-		goto do_scan;
 		/* clear pte access bits of the target mm */
 		ohp_clear_pte_accessed_mm(mm);
 		/* sleep for certain period. */
@@ -3044,7 +3053,6 @@ static int khugepaged(void *none)
 		/* adjust the position of each potential huge page region. */
 		ohp_adjust_mm_bins(mm);
 do_scan:
-#endif
 		/* Do the actual huge page promotion of active regions. */
 		khugepaged_do_scan();
 do_wait:

@@ -592,6 +592,7 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 	unsigned int index, new_index;
 	struct ohp_addr *kaddr, *tmp;
 
+	printk("OHP Adjusting mm bins\n");
 	index = mm->ohp.current_scan_idx;
 	list_for_each_entry_safe(kaddr, tmp, &mm->ohp.priority[index], entry) {
 		nr_accessed = ohp_nr_accessed(mm, kaddr->address);
@@ -601,7 +602,8 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 			 * further considerations.
 			 */
 			list_del(&kaddr->entry);
-			trace_printk("Huge page found overlapping vmas\n");
+			printk(KERN_INFO"Huge page found overlapping vmas\n");
+			continue;
 		}
 		if (nr_accessed > 50)
 			new_index = MAX_BINS - 1;
