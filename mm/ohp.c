@@ -126,6 +126,7 @@ void ohp_exit_mm(struct mm_struct *mm_src)
 			break;
 		}
 	}
+
 	spin_unlock(&ohp_mm_lock);
 	return;
 }
@@ -169,9 +170,9 @@ struct mm_struct *ohp_get_target_mm(void)
 
 	spin_lock(&ohp_mm_lock);
 	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
-		down_read(&mm->mmap_sem);
+		//down_read(&mm->mmap_sem);
 		weight = mm_ohp_weight(mm);
-		up_read(&mm->mmap_sem);
+		//up_read(&mm->mmap_sem);
 		if (weight > best_weight) {
 			best_mm = mm;
 			best_weight = weight;
@@ -224,10 +225,10 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	 */
 	list_del(&kaddr->entry);
 	kfree(kaddr);
-	down_write(&mm->mmap_sem);
+	//down_write(&mm->mmap_sem);
 	mm->ohp.count[i] -= 1;
 	mm->ohp.ohp_remaining -= 1;
-	up_write(&mm->mmap_sem);
+	//up_write(&mm->mmap_sem);
 	nr_ohp_bins -= 1;
 	spin_unlock(&ohp_mm_lock);
 	/*
@@ -257,10 +258,10 @@ void remove_ohp_bins(struct vm_area_struct *vma)
 				kaddr->address <= vma->vm_end) {
 				spin_lock(&ohp_mm_lock);
 				list_del(&kaddr->entry);
-				down_write(&mm->mmap_sem);
+				//down_write(&mm->mmap_sem);
 				mm->ohp.count[i] -= 1;
 				mm->ohp.ohp_remaining -= 1;
-				up_write(&mm->mmap_sem);
+				//up_write(&mm->mmap_sem);
 				nr_ohp_bins -= 1;
 				kfree(kaddr);
 				spin_unlock(&ohp_mm_lock);
@@ -304,14 +305,14 @@ int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 	kaddr->mm = mm;
 
 	spin_lock(&ohp_mm_lock);
-	down_read(&mm->mmap_sem);
+	//down_read(&mm->mmap_sem);
 	index = mm->ohp.current_scan_idx;
-	up_read(&mm->mmap_sem);
+	//up_read(&mm->mmap_sem);
 	list_add_tail(&kaddr->entry, &mm->ohp.priority[!(!index)]);
-	down_write(&mm->mmap_sem);
+	//down_write(&mm->mmap_sem);
 	mm->ohp.count[0] += 1;
 	mm->ohp.ohp_remaining += 1;
-	up_write(&mm->mmap_sem);
+	//up_write(&mm->mmap_sem);
 	nr_ohp_bins += 1;
 	spin_unlock(&ohp_mm_lock);
 	return 0;
@@ -610,9 +611,6 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 		list_move_tail(&kaddr->entry, &mm->ohp.priority[new_index]);
 	}
 	index = !(!index);
-	/* Update the index atomically. */
-	down_write(&mm->mmap_sem);
 	mm->ohp.current_scan_idx = index;
-	up_write(&mm->mmap_sem);
 }
 EXPORT_SYMBOL(ohp_adjust_mm_bins);
