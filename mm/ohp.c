@@ -162,9 +162,9 @@ static inline unsigned long mm_ohp_weight(struct mm_struct *mm)
  * participating in ohp framework and select the process
  * with the highest weight.
  */
-struct mm_struct *ohp_get_suitable_mm(void)
+struct mm_struct *ohp_get_target_mm(void)
 {
-	struct mm_struct *mm, *best_mm = NULL;
+	struct mm_struct *mm = NULL, *best_mm = NULL;
 	unsigned long weight, best_weight = 0;
 
 	spin_lock(&ohp_mm_lock);
@@ -180,6 +180,7 @@ struct mm_struct *ohp_get_suitable_mm(void)
 	spin_unlock(&ohp_mm_lock);
 	return best_mm;
 }
+EXPORT_SYMBOL(ohp_get_target_mm);
 
 /*
  * Get the next huge page candidate.
@@ -193,21 +194,25 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 
 	*mm_src = NULL;
 	/* select the best process first.*/
-	mm = ohp_get_suitable_mm();
+	mm = ohp_get_target_mm();
 	if (!mm)
 		return address;
 
 	spin_lock(&ohp_mm_lock);
+#if 0
 	for (i = MAX_BINS-1; i >= 0; i--) {
 		if (list_empty(&mm->ohp.priority[i]))
 			continue;
 		/* If we are here, we have found the next ohp candidate. */
 		goto found;
 	}
-	spin_unlock(&ohp_mm_lock);
-	return address;
+#endif
+	i = MAX_BINS - 1;
+	if (list_empty(&mm->ohp.priority[i])) {
+		spin_unlock(&ohp_mm_lock);
+		return address;
+	}
 
-found:
 	kaddr = list_first_entry(&mm->ohp.priority[i],
 			struct ohp_addr, entry);
 
@@ -271,6 +276,7 @@ void remove_ohp_bins(struct vm_area_struct *vma)
 int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 {
 	struct ohp_addr *kaddr;
+	unsigned int index;
 
 	if (!mm)
 		return 0;
@@ -298,7 +304,10 @@ int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 	kaddr->mm = mm;
 
 	spin_lock(&ohp_mm_lock);
-	list_add_tail(&kaddr->entry, &mm->ohp.priority[0]);
+	down_read(&mm->mmap_sem);
+	index = mm->ohp.current_scan_idx;
+	up_read(&mm->mmap_sem);
+	list_add_tail(&kaddr->entry, &mm->ohp.priority[!(!index)]);
 	down_write(&mm->mmap_sem);
 	mm->ohp.count[0] += 1;
 	mm->ohp.ohp_remaining += 1;
@@ -467,3 +476,143 @@ void stop_kbinmanager(void)
 		kbinmanager_thread = NULL;
 	}
 }
+
+#define CLEAR_PTE	0
+#define PTE_ACCESSED	1
+int ohp_follow_pte(struct mm_struct *mm, struct vm_area_struct *vma,
+			unsigned long addr, unsigned int op)
+{
+	pgd_t *pgd;
+	pud_t *pud;
+	pmd_t *pmd;
+	pte_t *ptep, pte, cleared;
+	spinlock_t *ptl;
+	int ret = 0;
+
+	pgd = pgd_offset(mm, addr);
+	if (pgd_none(*pgd) || unlikely (pgd_bad(*pgd)))
+		return ret;
+
+	pud = pud_offset(pgd, addr);
+	if (pud_none(*pud))
+		return ret;
+
+	pmd = pmd_offset(pud, addr);
+	if (pmd_none(*pmd))
+		return ret;
+
+	/* This should be a bug. */
+	if (pmd_trans_huge(*pmd))
+		return ret;
+
+	ptep = pte_offset_map_lock(mm, pmd, addr, &ptl);
+	pte = *ptep;
+	if (!pte_present(pte))
+		return ret;
+
+	if (op == PTE_ACCESSED) {
+		ret = pte_young(pte);
+	} else {
+		cleared = pte_mkold(pte);
+		set_pte_at(mm, addr, ptep, cleared);
+	}
+	pte_unmap_unlock(ptep, ptl);
+	return ret;
+}
+
+/* Clears the page table accessed bit for the specified huge page region.
+ * The address must be aligned with the huge page boundary.
+ */
+void ohp_clear_pte_accessed_range(struct mm_struct *mm, unsigned long start)
+{
+	struct vm_area_struct *vma;
+	unsigned long end = start + HPAGE_PMD_SIZE;
+	unsigned long address;
+
+	/*
+	 * Check if the whole range falls within a single vma.
+	 * If not, there is no need to scan this page as it can not
+	 * be promoted anyway.
+	 */
+	vma = find_vma(mm, start);
+	if (!vma)
+		return;
+
+	if (vma != find_vma(mm, end - PAGE_SIZE))
+		return;
+
+	/* Clear the accessed bit of each base page */
+	for (address = start; address < end; address += PAGE_SIZE)
+		ohp_follow_pte(mm, vma, address, CLEAR_PTE);
+}
+
+void ohp_clear_pte_accessed_mm(struct mm_struct *mm)
+{
+	unsigned int index;
+	struct ohp_addr *kaddr;
+	/*
+	 * Identify the list to be scanned and clear accessed bit of each base
+	 * page.
+	 */
+	index = mm->ohp.current_scan_idx;
+	list_for_each_entry(kaddr, &mm->ohp.priority[index], entry) {
+		ohp_clear_pte_accessed_range(mm, kaddr->address);
+	}
+}
+EXPORT_SYMBOL(ohp_clear_pte_accessed_mm);
+
+/*
+ * Returns the number of active baseline pages for the given huge page region.
+ * The address must be already aligned with the huge page boundary.
+ */
+int ohp_nr_accessed(struct mm_struct *mm, unsigned long start)
+{
+	struct vm_area_struct *vma;
+	unsigned long end = start + HPAGE_PMD_SIZE;
+	unsigned long address;
+	int nr_accessed = 0;
+
+	vma = find_vma(mm, start);
+	if (!vma)
+		return -1;
+
+	if (vma != find_vma(mm, end - PAGE_SIZE))
+		return -1;
+
+	for (address = start; address < end; address += PAGE_SIZE)
+		nr_accessed += ohp_follow_pte(mm, vma, address, PTE_ACCESSED);
+
+	return nr_accessed;
+}
+
+void ohp_adjust_mm_bins(struct mm_struct *mm)
+{
+	int nr_accessed;
+	unsigned int index, new_index;
+	struct ohp_addr *kaddr, *tmp;
+
+	index = mm->ohp.current_scan_idx;
+	list_for_each_entry_safe(kaddr, tmp, &mm->ohp.priority[index], entry) {
+		nr_accessed = ohp_nr_accessed(mm, kaddr->address);
+		if (nr_accessed < 0) {
+			/*
+			 * We treat this to be an error and discard this from
+			 * further considerations.
+			 */
+			list_del(&kaddr->entry);
+			trace_printk("Huge page found overlapping vmas\n");
+		}
+		if (nr_accessed > 50)
+			new_index = MAX_BINS - 1;
+		else
+			new_index = !(!(index));
+
+		list_move_tail(&kaddr->entry, &mm->ohp.priority[new_index]);
+	}
+	index = !(!index);
+	/* Update the index atomically. */
+	down_write(&mm->mmap_sem);
+	mm->ohp.current_scan_idx = index;
+	up_write(&mm->mmap_sem);
+}
+EXPORT_SYMBOL(ohp_adjust_mm_bins);

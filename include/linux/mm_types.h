@@ -370,9 +370,13 @@ struct kioctx_table;
 
 /*
  * Basic declarations for opportunistic huge page
- * framework.
+ * framework. We have 3 bins for managing huge page regions.
+ * List 3 is used to hold active huge page candidates. Rest two
+ * (i.e., list 0 and 1) are used to hold inactive pages and pages yet
+ * to be scanned.
  */
-#define MAX_BINS	10
+
+#define MAX_BINS	3
 
 struct ohp_addr {
 	unsigned long address;
@@ -385,6 +389,7 @@ struct ohp {
 	unsigned long		count[MAX_BINS];
 	unsigned long		ohp_remaining;
 	unsigned int		ohp_weight;
+	unsigned int		current_scan_idx;
 };
 
 struct mm_struct {

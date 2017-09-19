@@ -3010,15 +3010,45 @@ static void khugepaged_wait_work(void)
 		wait_event_freezable(khugepaged_wait, khugepaged_wait_event());
 }
 
+static void ohp_wait_scan_period(void)
+{
+	wait_event_freezable_timeout(khugepaged_wait,
+			kthread_should_stop(), msecs_to_jiffies(250));
+}
+
+
 static int khugepaged(void *none)
 {
 	struct mm_slot *mm_slot;
+	struct mm_struct *mm;
 
 	set_freezable();
 	set_user_nice(current, MAX_NICE);
 
 	while (!kthread_should_stop()) {
+#if 0
+		/* select target mm */
+		mm = ohp_get_target_mm();
+		if (!mm)
+			goto do_wait;
+
+		if (!list_empty(&mm->ohp.priority[MAX_BINS-1]))
+			goto do_scan;
+
+		printk(KERN_INFO"khugepaged doing scan\n");
+		goto do_scan;
+		/* clear pte access bits of the target mm */
+		ohp_clear_pte_accessed_mm(mm);
+		/* sleep for certain period. */
+		ohp_wait_scan_period();
+		/* adjust the position of each potential huge page region. */
+		ohp_adjust_mm_bins(mm);
+do_scan:
+#endif
+		/* Do the actual huge page promotion of active regions. */
 		khugepaged_do_scan();
+do_wait:
+		/* Give khugepaged a break. */
 		khugepaged_wait_work();
 	}
 
