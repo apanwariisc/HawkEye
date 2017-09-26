@@ -6,6 +6,7 @@
 #include <linux/threads.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
 #include <linux/completion.h>
@@ -385,6 +386,7 @@ struct ohp_addr {
 };
 
 struct ohp {
+	struct mutex		lock;
 	struct list_head	priority[MAX_BINS];
 	unsigned long		count[MAX_BINS];
 	unsigned long		ohp_remaining;

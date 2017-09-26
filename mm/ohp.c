@@ -144,6 +144,7 @@ void init_mm_ohp_bins(struct mm_struct *mm)
 	 * is just getting initialized.
 	 */
 	for (i=0; i<MAX_BINS; i++) {
+		mutex_init(&mm->ohp.lock);
 		INIT_LIST_HEAD(&mm->ohp.priority[i]);
 		mm->ohp.count[i] = 0;
 		mm->ohp.ohp_remaining = 0;
@@ -317,6 +318,7 @@ void remove_ohp_bins(struct vm_area_struct *vma)
 	mm = vma->vm_mm;
 	if (!mm)
 		return;
+
 	/* TODO: See if this can be optimized. */
 	for (i=0; i<MAX_BINS; i++) {
 		list_for_each_entry_safe(kaddr, tmp,
