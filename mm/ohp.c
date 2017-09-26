@@ -118,6 +118,7 @@ static inline int ohp_exit_task(struct task_struct *task)
 
 	if (!mm)
 		return -EINVAL;
+
 	ohp_exit_mm(mm);
 	mmput(mm);
 	return 0;
@@ -212,7 +213,7 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	if (!mm)
 		return address;
 
-	spin_lock(&ohp_mm_lock);
+	mutex_lock(&mm->ohp.lock);
 #if 0
 	for (i = MAX_BINS-1; i >= 0; i--) {
 		if (list_empty(&mm->ohp.priority[i]))
@@ -222,10 +223,8 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	}
 #endif
 	i = MAX_BINS - 1;
-	if (list_empty(&mm->ohp.priority[i])) {
-		spin_unlock(&ohp_mm_lock);
-		return address;
-	}
+	if (list_empty(&mm->ohp.priority[i]))
+		goto out;
 
 	kaddr = list_first_entry(&mm->ohp.priority[i],
 			struct ohp_addr, entry);
@@ -241,7 +240,8 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	mm->ohp.count[i] -= 1;
 	mm->ohp.ohp_remaining -= 1;
 	nr_ohp_bins -= 1;
-	spin_unlock(&ohp_mm_lock);
+out:
+	mutex_unlock(&mm->ohp.lock);
 	return address;
 }
 
@@ -267,10 +267,8 @@ unsigned long get_ohp_mm_addr(struct mm_struct *mm)
 	}
 #endif
 	i = MAX_BINS - 1;
-	if (list_empty(&mm->ohp.priority[i])) {
-		spin_unlock(&ohp_mm_lock);
-		return address;
-	}
+	if (list_empty(&mm->ohp.priority[i]))
+		goto out;
 
 	kaddr = list_first_entry(&mm->ohp.priority[i],
 			struct ohp_addr, entry);
@@ -285,6 +283,7 @@ unsigned long get_ohp_mm_addr(struct mm_struct *mm)
 	mm->ohp.count[i] -= 1;
 	mm->ohp.ohp_remaining -= 1;
 	nr_ohp_bins -= 1;
+out:
 	mutex_unlock(&mm->ohp.lock);
 	return address;
 }
