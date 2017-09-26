@@ -54,30 +54,6 @@ bool ohp_has_work(void)
 #define OHP_TASK_ENTER	1000
 #define OHP_TASK_EXIT	1001
 
-/*
- * TODO: Verify if how we get reference to task mm in below functions
- * is correct. Handle cases if mm runs away from under us.
- */
-static inline int ohp_add_task(struct task_struct *task)
-{
-	struct mm_struct *mm;
-
-	mm = get_task_mm(task);
-	if (!mm)
-		return -EINVAL;
-
-	spin_lock(&ohp_mm_lock);
-	list_add_tail(&mm->ohp_list, &ohp_scan.mm_head);
-	atomic_inc(&mm->mm_count);
-	spin_unlock(&ohp_mm_lock);
-	/*
-	 * kbinmanager may not have been started yet.
-	 */
-	start_kbinmanager();
-	mmput(mm);
-	return 0;
-}
-
 static inline void ohp_add_mm(struct mm_struct *mm)
 {
 	struct mm_struct *mm_struct = NULL;
@@ -96,23 +72,6 @@ out:
 	return;
 }
 
-static inline int ohp_exit_task(struct task_struct *task)
-{
-	struct mm_struct *mm;
-
-	mm = get_task_mm(task);
-
-	if (!mm)
-		return -EINVAL;
-
-	spin_lock(&ohp_mm_lock);
-	list_del(&mm->ohp_list);
-	mmdrop(mm);
-	spin_unlock(&ohp_mm_lock);
-	mmput(mm);
-	return 0;
-}
-
 void ohp_exit_mm(struct mm_struct *mm_src)
 {
 	struct mm_struct *mm, *tmp;
@@ -126,9 +85,42 @@ void ohp_exit_mm(struct mm_struct *mm_src)
 			break;
 		}
 	}
-
 	spin_unlock(&ohp_mm_lock);
 	return;
+}
+
+/*
+ * TODO: Verify if how we get reference to task mm in below functions
+ * is correct. Handle cases if mm runs away from under us.
+ */
+static inline int ohp_add_task(struct task_struct *task)
+{
+	struct mm_struct *mm;
+
+	mm = get_task_mm(task);
+	if (!mm)
+		return -EINVAL;
+
+	ohp_add_mm(mm);
+	/*
+	 * kbinmanager may not have been started yet.
+	 */
+	start_kbinmanager();
+	mmput(mm);
+	return 0;
+}
+
+static inline int ohp_exit_task(struct task_struct *task)
+{
+	struct mm_struct *mm;
+
+	mm = get_task_mm(task);
+
+	if (!mm)
+		return -EINVAL;
+	ohp_exit_mm(mm);
+	mmput(mm);
+	return 0;
 }
 
 /*
