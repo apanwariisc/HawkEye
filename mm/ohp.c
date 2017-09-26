@@ -160,9 +160,9 @@ unsigned long ohp_mm_pending_promotions(struct mm_struct *mm)
 {
 	unsigned long ret = 0;
 
-	spin_lock(&ohp_mm_lock);
+	mutex_lock(&mm->ohp.lock);
 	ret = mm->ohp.ohp_remaining;
-	spin_unlock(&ohp_mm_lock);
+	mutex_unlock(&mm->ohp.lock);
 
 	return ret;
 }
@@ -170,10 +170,15 @@ EXPORT_SYMBOL(ohp_mm_pending_promotions);
 
 static inline unsigned long mm_ohp_weight(struct mm_struct *mm)
 {
-	if (mm->ohp.ohp_remaining)
-		return ((mm->ohp.ohp_weight * 10000) / mm->ohp.ohp_remaining);
+	unsigned long weight = 0;
 
-	return 0;
+	mutex_lock(&mm->ohp.lock);
+	if (mm->ohp.ohp_remaining)
+		weight = ((mm->ohp.ohp_weight * 10000) /
+					mm->ohp.ohp_remaining);
+	mutex_unlock(&mm->ohp.lock);
+
+	return weight;
 }
 
 /*
@@ -188,9 +193,7 @@ struct mm_struct *ohp_get_target_mm(void)
 
 	spin_lock(&ohp_mm_lock);
 	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
-		//down_read(&mm->mmap_sem);
 		weight = mm_ohp_weight(mm);
-		//up_read(&mm->mmap_sem);
 		if (weight > best_weight) {
 			best_mm = mm;
 			best_weight = weight;
@@ -243,10 +246,8 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	 */
 	list_del(&kaddr->entry);
 	kfree(kaddr);
-	//down_write(&mm->mmap_sem);
 	mm->ohp.count[i] -= 1;
 	mm->ohp.ohp_remaining -= 1;
-	//up_write(&mm->mmap_sem);
 	nr_ohp_bins -= 1;
 	spin_unlock(&ohp_mm_lock);
 	/*
@@ -267,7 +268,7 @@ unsigned long get_ohp_mm_addr(struct mm_struct *mm)
 	if (!mm)
 		return 0;
 
-	spin_lock(&ohp_mm_lock);
+	mutex_lock(&mm->ohp.lock);
 #if 0
 	for (i = MAX_BINS-1; i >= 0; i--) {
 		if (list_empty(&mm->ohp.priority[i]))
@@ -292,12 +293,10 @@ unsigned long get_ohp_mm_addr(struct mm_struct *mm)
 	 */
 	list_del(&kaddr->entry);
 	kfree(kaddr);
-	//down_write(&mm->mmap_sem);
 	mm->ohp.count[i] -= 1;
 	mm->ohp.ohp_remaining -= 1;
-	//up_write(&mm->mmap_sem);
 	nr_ohp_bins -= 1;
-	spin_unlock(&ohp_mm_lock);
+	mutex_unlock(&mm->ohp.lock);
 	/*
 	trace_printk(KERN_INFO"Found mm address to promote\n");
 	*/
@@ -320,23 +319,21 @@ void remove_ohp_bins(struct vm_area_struct *vma)
 		return;
 
 	/* TODO: See if this can be optimized. */
+	mutex_lock(&mm->ohp.lock);
 	for (i=0; i<MAX_BINS; i++) {
 		list_for_each_entry_safe(kaddr, tmp,
 				&mm->ohp.priority[i], entry) {
 			if (kaddr->address >= vma->vm_start &&
 				kaddr->address <= vma->vm_end) {
-				spin_lock(&ohp_mm_lock);
 				list_del(&kaddr->entry);
-				//down_write(&mm->mmap_sem);
 				mm->ohp.count[i] -= 1;
 				mm->ohp.ohp_remaining -= 1;
-				//up_write(&mm->mmap_sem);
 				nr_ohp_bins -= 1;
 				kfree(kaddr);
-				spin_unlock(&ohp_mm_lock);
 			}
 		}
 	}
+	mutex_unlock(&mm->ohp.lock);
 }
 
 /*
@@ -373,17 +370,13 @@ int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 	kaddr->address = addr;
 	kaddr->mm = mm;
 
-	spin_lock(&ohp_mm_lock);
-	//down_read(&mm->mmap_sem);
+	mutex_lock(&mm->ohp.lock);
 	index = mm->ohp.current_scan_idx;
-	//up_read(&mm->mmap_sem);
 	list_add_tail(&kaddr->entry, &mm->ohp.priority[!(!index)]);
-	//down_write(&mm->mmap_sem);
 	mm->ohp.count[0] += 1;
 	mm->ohp.ohp_remaining += 1;
-	//up_write(&mm->mmap_sem);
 	nr_ohp_bins += 1;
-	spin_unlock(&ohp_mm_lock);
+	mutex_unlock(&mm->ohp.lock);
 	return 0;
 }
 
@@ -441,7 +434,6 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 		return -EINVAL;
 	}
 
-	//task_lock(task);
 	if (value == OHP_TASK_ENTER) {
 		ohp_add_task(task);
 		printk(KERN_INFO"Added pid: %d %s to scan list\n",
@@ -477,7 +469,6 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 	mmput(mm);
 
 exit_success:
-	//task_unlock(task);
 	return ret;
 }
 
@@ -763,7 +754,7 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 	struct ohp_addr *kaddr, *tmp;
 
 	/* TODO: Optimize locking behavior. */
-	spin_lock(&ohp_mm_lock);
+	mutex_lock(&mm->ohp.lock);
 	index = mm->ohp.current_scan_idx;
 	list_for_each_entry_safe(kaddr, tmp, &mm->ohp.priority[index], entry) {
 		nr_accessed = ohp_nr_accessed(mm, kaddr->address);
@@ -790,6 +781,6 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 	}
 	index = 1 - index;
 	mm->ohp.current_scan_idx = index;
-	spin_unlock(&ohp_mm_lock);
+	mutex_unlock(&mm->ohp.lock);
 }
 EXPORT_SYMBOL(ohp_adjust_mm_bins);
