@@ -9,6 +9,8 @@ extern void init_mm_ohp_bins(struct mm_struct *mm);
 extern void remove_ohp_bins(struct vm_area_struct *vma);
 extern int add_ohp_bin(struct mm_struct *mm, unsigned long addr);
 extern unsigned long get_next_ohp_addr(struct mm_struct **mm_struct);
+extern unsigned long get_ohp_mm_addr(struct mm_struct *mm_struct);
+extern unsigned long ohp_mm_pending_promotions(struct mm_struct *mm);
 int start_kbinmanager(void);
 void stop_kbinmanager(void);
 

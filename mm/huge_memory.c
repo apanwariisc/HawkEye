@@ -2761,10 +2761,10 @@ static void collect_mm_slot(struct mm_slot *mm_slot)
  * all khugepaged resources when a process exits.
  * Ideally, khugepaged should be completely replaced by ohp.
  */
-static unsigned int ohp_scan_mm(unsigned int pages,
-					    struct page **hpage)
+#define OHP_NO_WORK	99999
+static unsigned int ohp_scan_mm(struct mm_struct *mm,
+			unsigned int pages, struct page **hpage)
 {
-	struct mm_struct *mm = NULL;
 	struct vm_area_struct *vma;
 	unsigned long address;
 	int progress = 0, failed = 0, ret;
@@ -2776,14 +2776,9 @@ static unsigned int ohp_scan_mm(unsigned int pages,
 	 * independently. This may look messy but keeps the code simple.
 	 */
 	while (progress < pages && failed < 3) {
-		address = get_next_ohp_addr(&mm);
-		if (!mm) {
-			/*
-			trace_printk("Unable to find mm to promote\n");
-			*/
-			failed += 1;
-			continue;
-		}
+		address = get_ohp_mm_addr(mm);
+		if (address == 0)
+			return OHP_NO_WORK;
 
 		down_read(&mm->mmap_sem);
 		if (unlikely(khugepaged_test_exit(mm)))
@@ -2957,11 +2952,12 @@ static int khugepaged_wait_event(void)
 		kthread_should_stop();
 }
 
-static void khugepaged_do_scan(void)
+static void khugepaged_promote_mm(struct mm_struct *mm)
 {
 	struct page *hpage = NULL;
 	unsigned int progress = 0, pass_through_head = 0;
 	unsigned int pages = khugepaged_pages_to_scan;
+	unsigned int ret;
 	bool wait = true;
 
 	barrier(); /* write khugepaged_pages_to_scan to local stack */
@@ -2979,7 +2975,18 @@ static void khugepaged_do_scan(void)
 		if (!khugepaged_scan.mm_slot)
 			pass_through_head++;
 		if (khugepaged_has_work() && pass_through_head < 2) {
-			progress += ohp_scan_mm(pages-progress, &hpage);
+			ret = ohp_scan_mm(mm, pages-progress, &hpage);
+			if (ret != OHP_NO_WORK)
+				progress += ret;
+			else {
+				/*
+				 * If there is no work to be done, we can
+				 * safely put khugepaged to sleep.
+				 */
+				progress = pages;
+				spin_unlock(&khugepaged_mm_lock);
+				break;
+			}
 			/*
 			progress += khugepaged_scan_mm_slot(pages - progress,
 							    &hpage);
@@ -3034,7 +3041,12 @@ static int khugepaged(void *none)
 		/* select target mm */
 		mm = ohp_get_target_mm();
 		if (!mm)
-
+			goto do_wait;
+		/*
+		 * Check if promotions are pending. If not, we can safely go
+		 * back to sleep.
+		 */
+		if (!ohp_mm_pending_promotions(mm))
 			goto do_wait;
 
 		/*
@@ -3043,18 +3055,18 @@ static int khugepaged(void *none)
 		 * promote the pending promotions first.
 		 */
 		if (!list_empty(&mm->ohp.priority[MAX_BINS-1]))
-			goto do_scan;
+			goto do_promote;
 
-		printk(KERN_INFO"khugepaged doing scan\n");
+		printk(KERN_INFO"khugepaged doing page table scanning\n");
 		/* clear pte access bits of the target mm */
 		ohp_clear_pte_accessed_mm(mm);
 		/* sleep for certain period. */
 		ohp_wait_scan_period();
 		/* adjust the position of each potential huge page region. */
 		ohp_adjust_mm_bins(mm);
-do_scan:
+do_promote:
 		/* Do the actual huge page promotion of active regions. */
-		khugepaged_do_scan();
+		khugepaged_promote_mm(mm);
 do_wait:
 		/* Give khugepaged a break. */
 		khugepaged_wait_work();
