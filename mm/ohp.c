@@ -242,9 +242,6 @@ unsigned long get_next_ohp_addr(struct mm_struct **mm_src)
 	mm->ohp.ohp_remaining -= 1;
 	nr_ohp_bins -= 1;
 	spin_unlock(&ohp_mm_lock);
-	/*
-	trace_printk(KERN_INFO"Found mm address to promote\n");
-	*/
 	return address;
 }
 
@@ -289,9 +286,6 @@ unsigned long get_ohp_mm_addr(struct mm_struct *mm)
 	mm->ohp.ohp_remaining -= 1;
 	nr_ohp_bins -= 1;
 	mutex_unlock(&mm->ohp.lock);
-	/*
-	trace_printk(KERN_INFO"Found mm address to promote\n");
-	*/
 	return address;
 }
 
@@ -515,7 +509,6 @@ int start_kbinmanager(void)
 				kbinmanager_thread = NULL;
 				goto fail;
 			}
-			printk(KERN_INFO"kbinmanager thread started\n");
 		}
 	}
 fail:
@@ -668,9 +661,11 @@ void ohp_clear_pte_accessed_mm(struct mm_struct *mm)
 	 * Identify the list to be scanned and clear accessed bit of each base
 	 * page.
 	 */
+	mutex_lock(&mm->ohp.lock);
 	index = mm->ohp.current_scan_idx;
 	list_for_each_entry(kaddr, &mm->ohp.priority[index], entry)
 		ohp_clear_pte_accessed_range(mm, kaddr->address);
+	mutex_unlock(&mm->ohp.lock);
 }
 EXPORT_SYMBOL(ohp_clear_pte_accessed_mm);
 
