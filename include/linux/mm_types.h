@@ -377,12 +377,13 @@ struct kioctx_table;
  * to be scanned.
  */
 
-#define MAX_BINS	3
+#define MAX_BINS	12
 
 struct ohp_addr {
-	unsigned long address;
 	struct mm_struct *mm;
 	struct list_head entry;
+	unsigned long address;
+	unsigned int weight;
 };
 
 struct ohp {
@@ -392,6 +393,7 @@ struct ohp {
 	unsigned long		ohp_remaining;
 	unsigned int		ohp_weight;
 	unsigned int		current_scan_idx;
+	unsigned int		nr_scans;
 };
 
 struct mm_struct {

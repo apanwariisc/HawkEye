@@ -12,6 +12,7 @@
 #include <linux/syscalls.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
+#include <linux/log2.h>
 #include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/khugepaged.h>
@@ -141,6 +142,7 @@ void init_mm_ohp_bins(struct mm_struct *mm)
 		INIT_LIST_HEAD(&mm->ohp.priority[i]);
 		mm->ohp.count[i] = 0;
 		mm->ohp.ohp_remaining = 0;
+		mm->ohp.nr_scans = 0;
 	}
 }
 
@@ -258,18 +260,19 @@ unsigned long get_ohp_mm_addr(struct mm_struct *mm)
 		return 0;
 
 	mutex_lock(&mm->ohp.lock);
-#if 0
-	for (i = MAX_BINS-1; i >= 0; i--) {
+
+	/* search backwards from high to low priority bins. */
+	for (i = MAX_BINS-1; i > 1; i--) {
 		if (list_empty(&mm->ohp.priority[i]))
 			continue;
 		/* If we are here, we have found the next ohp candidate. */
 		goto found;
 	}
-#endif
-	i = MAX_BINS - 1;
+
 	if (list_empty(&mm->ohp.priority[i]))
 		goto out;
 
+found:
 	kaddr = list_first_entry(&mm->ohp.priority[i],
 			struct ohp_addr, entry);
 
@@ -733,10 +736,19 @@ static int ohp_nr_accessed(struct mm_struct *mm, unsigned long start)
 	return ohp_calc_hpage_hotness(mm, vma1, start);
 }
 
+static inline int update_get_kaddr_index(struct ohp_addr *kaddr, int nr_accessed)
+{
+	kaddr->weight = (kaddr->weight * 4 + nr_accessed * 6)/10;
+
+	if (kaddr->weight > HPAGE_PMD_NR)
+		kaddr->weight = HPAGE_PMD_NR;
+
+	return order_base_2(kaddr->weight);
+}
+
 void ohp_adjust_mm_bins(struct mm_struct *mm)
 {
-	int nr_accessed;
-	unsigned int index, new_index;
+	int nr_accessed, index, new_index;
 	struct ohp_addr *kaddr, *tmp;
 
 	/* TODO: Optimize locking behavior. */
@@ -744,6 +756,7 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 	index = mm->ohp.current_scan_idx;
 	list_for_each_entry_safe(kaddr, tmp, &mm->ohp.priority[index], entry) {
 		nr_accessed = ohp_nr_accessed(mm, kaddr->address);
+		/* Remove invalid addressed first. */
 		if (nr_accessed < 0) {
 			printk(KERN_INFO"OHP Found Invalid kaddr entry\n");
 			/*
@@ -756,12 +769,26 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 			kfree(kaddr);
 			continue;
 		}
-		if (nr_accessed > HPAGE_PMD_NR/10)
-			new_index = MAX_BINS - 1;
-		else
-			new_index = 1 - index;
 
-		/* Validate the new index for current huge page region. */
+		new_index = update_get_kaddr_index(kaddr, nr_accessed);
+
+		/* First 3 scans are used to indentify hot regions. */
+		if (mm->ohp.nr_scans < 3)
+			continue;
+		else {
+			/*
+			 * Less than 32 references and we put the region onto
+			 * the scan list to give it another chance. Note that
+			 * the first 2 lists are scanning lists used to hold
+			 * relatively inactive regions and hence addition of 2.
+			 */
+			if (new_index < 5)
+				new_index = 1 - index;
+			else
+				new_index = 2 + new_index;
+		}
+
+		/* Validate the new index of the current huge page region. */
 		VM_BUG_ON(new_index >= MAX_BINS);
 		list_move_tail(&kaddr->entry, &mm->ohp.priority[new_index]);
 	}

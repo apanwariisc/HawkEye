@@ -52,7 +52,7 @@ unsigned long transparent_hugepage_flags __read_mostly =
 	(1<<TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG);
 
 /* default scan 8*512 pte (or vmas) every 30 second */
-static unsigned int khugepaged_pages_to_scan __read_mostly = HPAGE_PMD_NR*8;
+static unsigned int khugepaged_pages_to_scan __read_mostly = HPAGE_PMD_NR*80;
 static unsigned int khugepaged_pages_collapsed;
 static unsigned int khugepaged_full_scans;
 static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
@@ -3022,10 +3022,10 @@ static void khugepaged_wait_work(void)
  * to the application to access the pages. Ideally, this should not
  * be too big.
  */
-static void ohp_wait_scan_period(void)
+static void ohp_wait_scan_period(unsigned long msecs)
 {
 	wait_event_freezable_timeout(khugepaged_wait,
-			kthread_should_stop(), msecs_to_jiffies(250));
+			kthread_should_stop(), msecs_to_jiffies(msecs));
 }
 
 
@@ -3042,12 +3042,6 @@ static int khugepaged(void *none)
 		mm = ohp_get_target_mm();
 		if (!mm)
 			goto do_wait;
-		/*
-		 * Check if promotions are pending. If not, we can safely go
-		 * back to sleep.
-		 */
-		if (!ohp_mm_pending_promotions(mm))
-			goto do_wait;
 
 		/*
 		 * Check if high priority promotions are pending.
@@ -3057,13 +3051,20 @@ static int khugepaged(void *none)
 		if (!list_empty(&mm->ohp.priority[MAX_BINS-1]))
 			goto do_promote;
 
+scan_mm:
 		printk(KERN_INFO"khugepaged doing page table scanning\n");
 		/* clear pte access bits of the target mm */
 		ohp_clear_pte_accessed_mm(mm);
 		/* sleep for certain period. */
-		ohp_wait_scan_period();
+		ohp_wait_scan_period(500);
 		/* adjust the position of each potential huge page region. */
 		ohp_adjust_mm_bins(mm);
+		mm->ohp.nr_scans += 1;
+		/* Scan mm atleast 3 times before promoting any region. */
+		if (mm->ohp.nr_scans < 4) {
+			ohp_wait_scan_period(2000);
+			goto scan_mm;
+		}
 do_promote:
 		/* Do the actual huge page promotion of active regions. */
 		khugepaged_promote_mm(mm);
