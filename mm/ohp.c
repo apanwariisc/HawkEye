@@ -163,6 +163,26 @@ unsigned long ohp_mm_pending_promotions(struct mm_struct *mm)
 }
 EXPORT_SYMBOL(ohp_mm_pending_promotions);
 
+unsigned long ohp_mm_priority_promotions(struct mm_struct *mm)
+{
+	int i;
+	unsigned long ret = 0;
+
+	mutex_lock(&mm->ohp.lock);
+	for ( i = 0; i < 2; i++)
+		ret += mm->ohp.count[i];
+	mutex_unlock(&mm->ohp.lock);
+	printk(KERN_INFO"OHP Scan Enteries: %ld\n", ret);
+	ret = 0;
+	mutex_lock(&mm->ohp.lock);
+	for ( i = MAX_BINS-1; i > 1; i--)
+		ret += mm->ohp.count[i];
+	mutex_unlock(&mm->ohp.lock);
+	printk(KERN_INFO"OHP Promote Enteries: %ld\n", ret);
+
+	return ret;
+}
+
 static inline unsigned long mm_ohp_weight(struct mm_struct *mm)
 {
 	unsigned long weight = 0;
@@ -250,10 +270,9 @@ out:
 /*
  * Get the next huge page candidate for a specific mm.
  */
-unsigned long get_ohp_mm_addr(struct mm_struct *mm)
+struct ohp_addr *get_ohp_mm_addr(struct mm_struct *mm)
 {
-	struct ohp_addr *kaddr;
-	unsigned long address = 0;
+	struct ohp_addr *kaddr = NULL;
 	int i;
 
 	if (!mm)
@@ -276,21 +295,31 @@ found:
 	kaddr = list_first_entry(&mm->ohp.priority[i],
 			struct ohp_addr, entry);
 
-	address = kaddr->address;
 	/*
 	 * We perhaps do not want to see the same address again.
 	 * Delete it.
 	 */
 	list_del(&kaddr->entry);
-	kfree(kaddr);
 	mm->ohp.count[i] -= 1;
 	mm->ohp.ohp_remaining -= 1;
 	nr_ohp_bins -= 1;
 out:
 	mutex_unlock(&mm->ohp.lock);
-	return address;
+	return kaddr;
 }
 
+void ohp_putback_kaddr(struct mm_struct *mm, struct ohp_addr *kaddr)
+{
+	int pos;
+
+	mutex_lock(&mm->ohp.lock);
+	/* put back on the to be scanned list */
+	pos = 1 - mm->ohp.current_scan_idx;
+	list_add_tail(&kaddr->entry, &mm->ohp.priority[pos]);
+	mm->ohp.count[pos] += 1;
+	mm->ohp.ohp_remaining += 1;
+	mutex_unlock(&mm->ohp.lock);
+}
 
 /*
  * Remove a range of addresses from the ohps.
@@ -361,7 +390,7 @@ int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 	mutex_lock(&mm->ohp.lock);
 	index = mm->ohp.current_scan_idx;
 	list_add_tail(&kaddr->entry, &mm->ohp.priority[!(!index)]);
-	mm->ohp.count[0] += 1;
+	mm->ohp.count[index] += 1;
 	mm->ohp.ohp_remaining += 1;
 	nr_ohp_bins += 1;
 	mutex_unlock(&mm->ohp.lock);
@@ -463,9 +492,10 @@ exit_success:
 static void kbinmanager_do_scan(void)
 {
 	static unsigned long iteration = 0;
-
+#if 0
 	printk(KERN_INFO"kbinmanager scan: %ld Promotions Left: %ld\n",
 					iteration, nr_ohp_bins);
+#endif
 	iteration += 1;
 }
 
@@ -758,13 +788,13 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 		nr_accessed = ohp_nr_accessed(mm, kaddr->address);
 		/* Remove invalid addressed first. */
 		if (nr_accessed < 0) {
-			printk(KERN_INFO"OHP Found Invalid kaddr entry\n");
 			/*
 			 * We treat this to be an error and discard this from
 			 * further considerations.
 			 */
 			list_del(&kaddr->entry);
 			mm->ohp.ohp_remaining -= 1;
+			mm->ohp.count[index] -= 1;
 			nr_ohp_bins -= 1;
 			kfree(kaddr);
 			continue;
@@ -782,7 +812,7 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 			 * the first 2 lists are scanning lists used to hold
 			 * relatively inactive regions and hence addition of 2.
 			 */
-			if (new_index < 5)
+			if (new_index < 2)
 				new_index = 1 - index;
 			else
 				new_index = 2 + new_index;
@@ -791,6 +821,8 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 		/* Validate the new index of the current huge page region. */
 		VM_BUG_ON(new_index >= MAX_BINS);
 		list_move_tail(&kaddr->entry, &mm->ohp.priority[new_index]);
+		mm->ohp.count[index] -= 1;
+		mm->ohp.count[new_index] += 1;
 	}
 	index = 1 - index;
 	mm->ohp.current_scan_idx = index;

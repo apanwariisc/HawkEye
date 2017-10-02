@@ -52,7 +52,7 @@ unsigned long transparent_hugepage_flags __read_mostly =
 	(1<<TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG);
 
 /* default scan 8*512 pte (or vmas) every 30 second */
-static unsigned int khugepaged_pages_to_scan __read_mostly = HPAGE_PMD_NR*80;
+static unsigned int khugepaged_pages_to_scan __read_mostly = HPAGE_PMD_NR*8;
 static unsigned int khugepaged_pages_collapsed;
 static unsigned int khugepaged_full_scans;
 static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
@@ -2718,8 +2718,18 @@ static int khugepaged_scan_pmd(struct mm_struct *mm,
 		    mmu_notifier_test_young(vma->vm_mm, address))
 			referenced = true;
 	}
+#if 0
+	if (!referenced)
+		printk(KERN_INFO"OHP: Promotion failing due to cold region\n");
+#endif
+#if 0
 	if (referenced && writable)
 		ret = 1;
+#endif
+	if (!writable)
+		printk(KERN_INFO"OHP: Not promoting due to read-only\n");
+	ret = 1;
+
 out_unmap:
 	pte_unmap_unlock(pte, ptl);
 	if (ret) {
@@ -2766,6 +2776,7 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 			unsigned int pages, struct page **hpage)
 {
 	struct vm_area_struct *vma;
+	struct ohp_addr *kaddr;
 	unsigned long address;
 	int progress = 0, failed = 0, ret;
 
@@ -2775,32 +2786,37 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 	 * Each iteration will acquire and release the mmap semaphore
 	 * independently. This may look messy but keeps the code simple.
 	 */
-	while (progress < pages && failed < 3) {
-		address = get_ohp_mm_addr(mm);
-		if (address == 0)
+	while (progress < pages && failed < 500) {
+		kaddr = get_ohp_mm_addr(mm);
+		if (!kaddr)
 			return OHP_NO_WORK;
+
+		address = kaddr->address;
 
 		down_read(&mm->mmap_sem);
 		if (unlikely(khugepaged_test_exit(mm)))
 			vma = NULL;
 		else
-		vma = find_vma(mm, address);
+			vma = find_vma(mm, address);
 
 		if (!vma) {
 			failed += 1;
 			up_read(&mm->mmap_sem);
+			ohp_putback_kaddr(mm, kaddr);
 			continue;
 		}
 
 		if (!(address >= vma->vm_start && address < vma->vm_end)) {
 			failed += 1;
 			up_read(&mm->mmap_sem);
+			ohp_putback_kaddr(mm, kaddr);
 			continue;
 		}
 
 		if (!hugepage_vma_check(vma)) {
 			failed += 1;
 			up_read(&mm->mmap_sem);
+			ohp_putback_kaddr(mm, kaddr);
 			continue;
 		}
 
@@ -2811,12 +2827,17 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 		ret = khugepaged_scan_pmd(mm, vma, address, hpage);
 
 		/* mmap sem already released. */
-		if (ret)
+		if (ret) {
 			progress += HPAGE_PMD_NR;
+			kfree(kaddr);
+		}
 		else {
 			failed += 1;
+			/* Give it another chance. */
+			ohp_putback_kaddr(mm, kaddr);
 			/* release and require */
 			up_read(&mm->mmap_sem);
+			count_vm_event(OHP_PROMOTE_FAILED);
 		}
 	}
 
@@ -3017,6 +3038,14 @@ static void khugepaged_wait_work(void)
 		wait_event_freezable(khugepaged_wait, khugepaged_wait_event());
 }
 
+static void ohp_sleep_iteration(void)
+{
+	wait_event_freezable_timeout(khugepaged_wait,
+			kthread_should_stop(),
+			msecs_to_jiffies(khugepaged_scan_sleep_millisecs));
+}
+
+
 /*
  * After clearing the page table accessed bit, we give some time
  * to the application to access the pages. Ideally, this should not
@@ -3029,10 +3058,12 @@ static void ohp_wait_scan_period(unsigned long msecs)
 }
 
 
+
 static int khugepaged(void *none)
 {
 	struct mm_slot *mm_slot;
 	struct mm_struct *mm;
+	unsigned long nr_priority;
 
 	set_freezable();
 	set_user_nice(current, MAX_NICE);
@@ -3048,15 +3079,14 @@ static int khugepaged(void *none)
 		 * If yes, we can simply skip scanning for now and
 		 * promote the pending promotions first.
 		 */
-		if (!list_empty(&mm->ohp.priority[MAX_BINS-1]))
+		nr_priority = ohp_mm_priority_promotions(mm);
+		if (nr_priority * HPAGE_PMD_NR >= khugepaged_pages_to_scan)
 			goto do_promote;
-
 scan_mm:
-		printk(KERN_INFO"khugepaged doing page table scanning\n");
 		/* clear pte access bits of the target mm */
 		ohp_clear_pte_accessed_mm(mm);
 		/* sleep for certain period. */
-		ohp_wait_scan_period(500);
+		ohp_wait_scan_period(1000);
 		/* adjust the position of each potential huge page region. */
 		ohp_adjust_mm_bins(mm);
 		mm->ohp.nr_scans += 1;
@@ -3070,7 +3100,8 @@ do_promote:
 		khugepaged_promote_mm(mm);
 do_wait:
 		/* Give khugepaged a break. */
-		khugepaged_wait_work();
+		//khugepaged_wait_work();
+		ohp_sleep_iteration();
 	}
 
 	spin_lock(&khugepaged_mm_lock);
