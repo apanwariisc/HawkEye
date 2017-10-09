@@ -2718,17 +2718,9 @@ static int khugepaged_scan_pmd(struct mm_struct *mm,
 		    mmu_notifier_test_young(vma->vm_mm, address))
 			referenced = true;
 	}
-#if 0
-	if (!referenced)
-		printk(KERN_INFO"OHP: Promotion failing due to cold region\n");
-#endif
-#if 0
+
 	if (referenced && writable)
 		ret = 1;
-#endif
-	if (!writable)
-		printk(KERN_INFO"OHP: Not promoting due to read-only\n");
-	ret = 1;
 
 out_unmap:
 	pte_unmap_unlock(pte, ptl);
