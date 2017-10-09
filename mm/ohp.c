@@ -477,12 +477,12 @@ SYSCALL_DEFINE2(update_mm_ohp_stats, unsigned int, pid, unsigned int, value)
 		return -EINVAL;
 
 	/*
-	 * We keep weight as the exponential moving average to reduce
-	 * the probability of noisy updates. Low priority is given to
-	 * current value as we favor processes that have high TLB
-	 * overheads for long periods.
+	 * We expect the user-space deamon to suppply weight
+	 * as the moving average. Floating point caclulation is
+	 * easier in the user-space so it also avoids the need
+	 * for tuning the calculation.
 	 */
-	mm->ohp.ohp_weight = (8 * mm->ohp.ohp_weight + 2 * value)/10;
+	mm->ohp.ohp_weight = value;
 	mmput(mm);
 
 exit_success:
