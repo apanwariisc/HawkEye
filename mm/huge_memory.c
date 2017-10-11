@@ -53,6 +53,8 @@ unsigned long transparent_hugepage_flags __read_mostly =
 
 /* default scan 8*512 pte (or vmas) every 30 second */
 static unsigned int khugepaged_pages_to_scan __read_mostly = HPAGE_PMD_NR*8;
+static unsigned int max_thp_collapse_alloc __read_mostly = 1250000000;
+static atomic_t thp_collapse_alloc;
 static unsigned int khugepaged_pages_collapsed;
 static unsigned int khugepaged_full_scans;
 static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
@@ -467,6 +469,34 @@ static ssize_t pages_to_scan_show(struct kobject *kobj,
 {
 	return sprintf(buf, "%u\n", khugepaged_pages_to_scan);
 }
+
+static ssize_t max_thp_collapse_alloc_show(struct kobject *kobj,
+                                  struct kobj_attribute *attr,
+                                  char *buf)
+{
+        return sprintf(buf, "%u\n", max_thp_collapse_alloc);
+}
+
+static ssize_t max_thp_collapse_alloc_store(struct kobject *kobj,
+				   struct kobj_attribute *attr,
+				   const char *buf, size_t count)
+{
+	int err;
+	unsigned long pages;
+
+	err = kstrtoul(buf, 10, &pages);
+	if (err || !pages || pages > UINT_MAX)
+		return -EINVAL;
+
+	max_thp_collapse_alloc = pages + read_vm_event(THP_COLLAPSE_ALLOC);
+
+	return count;
+}
+
+static struct kobj_attribute max_thp_collapse_alloc_attr =
+	__ATTR(max_thp_collapse_alloc, 0644, max_thp_collapse_alloc_show,
+	       max_thp_collapse_alloc_store);
+
 static ssize_t pages_to_scan_store(struct kobject *kobj,
 				   struct kobj_attribute *attr,
 				   const char *buf, size_t count)
@@ -562,6 +592,7 @@ static struct attribute *khugepaged_attr[] = {
 	&full_scans_attr.attr,
 	&scan_sleep_millisecs_attr.attr,
 	&alloc_sleep_millisecs_attr.attr,
+	&max_thp_collapse_alloc_attr.attr,
 	NULL,
 };
 
@@ -2438,7 +2469,11 @@ khugepaged_alloc_page(struct page **hpage, gfp_t gfp, struct mm_struct *mm,
 	 */
 	up_read(&mm->mmap_sem);
 
-	*hpage = __alloc_pages_node(node, gfp, HPAGE_PMD_ORDER);
+	if (atomic_read(&thp_collapse_alloc) < max_thp_collapse_alloc)
+		*hpage = __alloc_pages_node(node, gfp, HPAGE_PMD_ORDER);
+	else
+		*hpage = NULL;
+
 	if (unlikely(!*hpage)) {
 		count_vm_event(THP_COLLAPSE_ALLOC_FAILED);
 		*hpage = ERR_PTR(-ENOMEM);
@@ -2446,6 +2481,7 @@ khugepaged_alloc_page(struct page **hpage, gfp_t gfp, struct mm_struct *mm,
 	}
 
 	count_vm_event(THP_COLLAPSE_ALLOC);
+	atomic_inc(&thp_collapse_alloc);
 	return *hpage;
 }
 #else

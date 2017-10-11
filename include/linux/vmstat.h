@@ -41,6 +41,11 @@ static inline void count_vm_event(enum vm_event_item item)
 	this_cpu_inc(vm_event_states.event[item]);
 }
 
+static inline unsigned long read_vm_event(enum vm_event_item item)
+{
+	return this_cpu_read(vm_event_states.event[item]);
+}
+
 static inline void __count_vm_events(enum vm_event_item item, long delta)
 {
 	raw_cpu_add(vm_event_states.event[item], delta);
