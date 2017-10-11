@@ -837,14 +837,11 @@ static int ohp_nr_accessed(struct mm_struct *mm, unsigned long start)
 	return ohp_calc_hpage_hotness(mm, vma1, start);
 }
 
-static inline int update_get_kaddr_index(struct ohp_addr *kaddr, int nr_accessed)
+static inline void update_kaddr_weight(struct ohp_addr *kaddr, int nr_accessed)
 {
-	kaddr->weight = (kaddr->weight * 4 + nr_accessed * 6)/10;
-
+	kaddr->weight = (kaddr->weight * 6 + nr_accessed * 4) / 10;
 	if (kaddr->weight > HPAGE_PMD_NR)
 		kaddr->weight = HPAGE_PMD_NR;
-
-	return order_base_2(kaddr->weight);
 }
 
 void ohp_adjust_mm_bins(struct mm_struct *mm)
@@ -872,8 +869,16 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 			continue;
 		}
 
-		new_index = update_get_kaddr_index(kaddr, nr_accessed);
+		kaddr->nr_scans += 1;
+		update_kaddr_weight(kaddr, nr_accessed);
+		/* Make sure we do not put it back on the current scan list. */
+		if (kaddr->nr_scans < 3 ||
+			order_base_2(kaddr->weight) == index)
+			new_index = 1 - index;
+		else
+			new_index = order_base_2(kaddr->weight);
 
+#if 0
 		/* First 3 scans are used to indentify hot regions. */
 		if (mm->ohp.nr_scans < 3)
 			continue;
@@ -889,13 +894,15 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 			else
 				new_index = 2 + new_index;
 		}
+#endif
 
 		/* Validate the new index of the current huge page region. */
 		VM_BUG_ON(new_index >= MAX_BINS);
-		list_move_tail(&kaddr->entry, &mm->ohp.priority[new_index]);
+		list_move(&kaddr->entry, &mm->ohp.priority[new_index]);
 		mm->ohp.count[index] -= 1;
 		mm->ohp.count[new_index] += 1;
 	}
+	/* Update the index to be scanned next. */
 	index = 1 - index;
 	mm->ohp.current_scan_idx = index;
 	mm->ohp.nr_scans += 1;

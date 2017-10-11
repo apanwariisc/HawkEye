@@ -384,6 +384,7 @@ struct ohp_addr {
 	struct list_head entry;
 	unsigned long address;
 	unsigned int weight;
+	unsigned int nr_scans;
 };
 
 struct ohp {
