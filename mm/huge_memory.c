@@ -2553,7 +2553,7 @@ static bool hugepage_vma_check(struct vm_area_struct *vma)
 	return true;
 }
 
-static void collapse_huge_page(struct mm_struct *mm,
+static int collapse_huge_page(struct mm_struct *mm,
 				   unsigned long address,
 				   struct page **hpage,
 				   struct vm_area_struct *vma,
@@ -2580,11 +2580,11 @@ static void collapse_huge_page(struct mm_struct *mm,
 	/* release the mmap_sem read lock. */
 	new_page = khugepaged_alloc_page(hpage, gfp, mm, vma, address, node);
 	if (!new_page)
-		return;
+		return 0;
 
 	if (unlikely(mem_cgroup_try_charge(new_page, mm,
 					   gfp, &memcg)))
-		return;
+		return 1;
 
 	/*
 	 * Prevent all access to pagetables with the exception of
@@ -2682,7 +2682,7 @@ static void collapse_huge_page(struct mm_struct *mm,
 	khugepaged_pages_collapsed++;
 out_up_write:
 	up_write(&mm->mmap_sem);
-	return;
+	return 1;
 
 out:
 	mem_cgroup_cancel_charge(new_page, memcg);
@@ -2762,11 +2762,15 @@ out_unmap:
 	pte_unmap_unlock(pte, ptl);
 	if (ret) {
 		node = khugepaged_find_target_node();
-		/* collapse_huge_page will return with the mmap_sem released */
-		collapse_huge_page(mm, address, hpage, vma, node);
+		/*
+		 * collapse_huge_page always returns with the
+		 * semaphore released. The caller can always rely on this.
+		 */
+		return 1 + collapse_huge_page(mm, address, hpage, vma, node);
 	}
 out:
-	return ret;
+	/* The caller must release the semaphore if returning from here. */
+	return 0;
 }
 
 static void collect_mm_slot(struct mm_slot *mm_slot)
@@ -2814,7 +2818,7 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 	 * Each iteration will acquire and release the mmap semaphore
 	 * independently. This may look messy but keeps the code simple.
 	 */
-	while (progress < pages && failed < 500) {
+	while (progress < pages && failed < 3) {
 		kaddr = get_ohp_mm_addr(mm);
 		if (!kaddr)
 			return OHP_NO_WORK;
@@ -2851,13 +2855,23 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 		/* Check for alignment. */
 		VM_BUG_ON(address & ~HPAGE_PMD_MASK);
 
-		/* promote into a huge page. */
+		/* promote into a huge page.
+		 * Total two return values are possible.
+		 * 0 - semaphore must be released.
+		 * 1 - semaphore has been released but promotion failed.
+		 * 2 - semaphore has been released and promotion succeded.
+		 */
 		ret = khugepaged_scan_pmd(mm, vma, address, hpage);
 
 		/* mmap sem already released. */
-		if (ret) {
+		if (ret == 2) {
 			progress += HPAGE_PMD_NR;
 			kfree(kaddr);
+		}
+		else if (ret == 1) {
+			failed += 1;
+			ohp_putback_kaddr(mm, kaddr);
+			count_vm_event(OHP_PROMOTE_FAILED);
 		}
 		else {
 			failed += 1;
@@ -2865,7 +2879,6 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 			ohp_putback_kaddr(mm, kaddr);
 			/* release and require */
 			up_read(&mm->mmap_sem);
-			count_vm_event(OHP_PROMOTE_FAILED);
 		}
 	}
 
