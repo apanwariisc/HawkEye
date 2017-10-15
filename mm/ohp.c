@@ -168,17 +168,21 @@ unsigned long ohp_mm_priority_promotions(struct mm_struct *mm)
 	int i;
 	unsigned long ret = 0;
 
+#if 0
 	mutex_lock(&mm->ohp.lock);
 	for ( i = 0; i < 2; i++)
 		ret += mm->ohp.count[i];
 	mutex_unlock(&mm->ohp.lock);
 	printk(KERN_INFO"OHP Scan Enteries: %ld\n", ret);
 	ret = 0;
+#endif
 	mutex_lock(&mm->ohp.lock);
 	for ( i = MAX_BINS-1; i > 1; i--)
 		ret += mm->ohp.count[i];
 	mutex_unlock(&mm->ohp.lock);
+#if 0
 	printk(KERN_INFO"OHP Promote Enteries: %ld\n", ret);
+#endif
 
 	return ret;
 }
