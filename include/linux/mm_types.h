@@ -391,6 +391,7 @@ struct ohp {
 	struct list_head	priority[MAX_BINS];
 	unsigned long		count[MAX_BINS];
 	unsigned long		ohp_remaining;
+	unsigned long		invalid;
 	unsigned int		ohp_weight;
 	unsigned int		current_scan_idx;
 	unsigned int		nr_scans;

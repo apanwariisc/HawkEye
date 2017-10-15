@@ -799,6 +799,7 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 			list_del(&kaddr->entry);
 			mm->ohp.ohp_remaining -= 1;
 			mm->ohp.count[index] -= 1;
+			mm->ohp.invalid += 1;
 			nr_ohp_bins -= 1;
 			kfree(kaddr);
 			continue;
