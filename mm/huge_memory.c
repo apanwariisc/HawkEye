@@ -3085,6 +3085,7 @@ static void ohp_sleep_iteration(unsigned long busy_msecs,
 {
 	long idle_msecs;
 
+#if 0
 	/* Sleep accordingly to restrict CPU utilization to 5%. */
 	idle_msecs = (busy_msecs * 100)/5;
 	/*
@@ -3094,7 +3095,10 @@ static void ohp_sleep_iteration(unsigned long busy_msecs,
 	idle_msecs -= sleep_msecs;
 	if (idle_msecs < 1000)
 		idle_msecs = 1000;
-
+#endif
+	idle_msecs = busy_msecs * 19;
+	if (idle_msecs < 100)
+		idle_msecs = 100;
 #if 0
 	wait_event_freezable_timeout(khugepaged_wait,
 			kthread_should_stop(),
@@ -3183,7 +3187,7 @@ do_promote:
 do_wait:
 		/* Give khugepaged a break. */
 		//khugepaged_wait_work();
-		ohp_sleep_iteration(promotion_msecs + scan_msecs, wait_msecs);
+		ohp_sleep_iteration(promotion_msecs, wait_msecs);
 	}
 
 	spin_lock(&khugepaged_mm_lock);
