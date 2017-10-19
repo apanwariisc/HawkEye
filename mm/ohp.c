@@ -164,46 +164,26 @@ void init_mm_ohp_bins(struct mm_struct *mm)
  */
 unsigned long ohp_mm_pending_promotions(struct mm_struct *mm)
 {
-	unsigned long ret = 0;
+	int i;
+	unsigned long remaining = 0;
 
-	mutex_lock(&mm->ohp.lock);
-	ret = mm->ohp.ohp_remaining;
-	mutex_unlock(&mm->ohp.lock);
+	for (i = MAX_BINS - 1; i > 1; i--)
+		remaining += mm->ohp.count[i];
 
-	return ret;
+	/*
+	 * mm should have enough promotions pending for the
+	 * atleat 1 khugepaged iteration.
+	 */
+	return remaining > 7 ? 1 : 0;
 }
 EXPORT_SYMBOL(ohp_mm_pending_promotions);
-
-unsigned long ohp_mm_priority_promotions(struct mm_struct *mm)
-{
-	int i;
-	unsigned long ret = 0;
-
-#if 0
-	mutex_lock(&mm->ohp.lock);
-	for ( i = 0; i < 2; i++)
-		ret += mm->ohp.count[i];
-	mutex_unlock(&mm->ohp.lock);
-	printk(KERN_INFO"OHP Scan Enteries: %ld\n", ret);
-	ret = 0;
-#endif
-	mutex_lock(&mm->ohp.lock);
-	for ( i = MAX_BINS-1; i > 1; i--)
-		ret += mm->ohp.count[i];
-	mutex_unlock(&mm->ohp.lock);
-#if 0
-	printk(KERN_INFO"OHP Promote Enteries: %ld\n", ret);
-#endif
-
-	return ret;
-}
 
 static inline unsigned long mm_ohp_weight(struct mm_struct *mm)
 {
 	unsigned long weight = 0;
 
 	mutex_lock(&mm->ohp.lock);
-	if (mm->ohp.ohp_remaining)
+	if (ohp_mm_pending_promotions(mm))
 		weight = ((mm->ohp.ohp_weight * 10000) /
 					mm->ohp.ohp_remaining);
 	mutex_unlock(&mm->ohp.lock);
