@@ -22,7 +22,6 @@
 DEFINE_SPINLOCK(ohp_mm_lock);
 
 static struct task_struct *kbinmanager_thread __read_mostly;
-static unsigned int kbinmanager_scan_sleep_msecs = 10000;
 static DECLARE_WAIT_QUEUE_HEAD(kbinmanager_wait);
 
 /*
@@ -43,6 +42,18 @@ struct ohp_scan {
 struct ohp_scan ohp_scan = {
 	.mm_head = LIST_HEAD_INIT(ohp_scan.mm_head),
 };
+
+unsigned long get_time_difference(struct timeval *t0, struct timeval *t1)
+{
+	long msecs;
+
+	msecs = (t1->tv_sec - t0->tv_sec) * 1000 +
+			(t1->tv_usec - t0->tv_usec) / 1000;
+	if (msecs < 0)
+		msecs = 0;
+
+	return (unsigned long) msecs;
+}
 
 bool ohp_has_work(void)
 {
@@ -285,7 +296,7 @@ struct ohp_addr *get_ohp_mm_addr(struct mm_struct *mm)
 	mutex_lock(&mm->ohp.lock);
 
 	/* search backwards from high to low priority bins. */
-	for (i = MAX_BINS-1; i > 1; i--) {
+	for (i = MAX_BINS - 1; i > 1; i--) {
 		if (list_empty(&mm->ohp.priority[i]))
 			continue;
 		/* If we are here, we have found the next ohp candidate. */
@@ -493,22 +504,81 @@ exit_success:
 	return ret;
 }
 
-static void kbinmanager_do_scan(void)
+static void kbinmanager_wait_cpu_bound(unsigned long busy_msecs,
+				unsigned long idle_msecs)
 {
-	static unsigned long iteration = 0;
-#if 0
-	printk(KERN_INFO"kbinmanager scan: %ld Promotions Left: %ld\n",
-					iteration, nr_ohp_bins);
-#endif
-	iteration += 1;
+	unsigned long sleep_msecs;
+
+	/*
+	 * We have seen idle to be more than busy at times.
+	 * Below is a workaround to handle indefinite sleeping.
+	 */
+	if (idle_msecs > busy_msecs)
+		busy_msecs = 0;
+	else
+		busy_msecs = busy_msecs - idle_msecs;
+	/*
+	 * Bound by 5% cpu utilization.
+	 * Also, enforce minimum bound of 5 seconds.
+	 */
+	sleep_msecs = busy_msecs * 19;
+	if (sleep_msecs < 5000)
+		sleep_msecs = 5000;
+
+	trace_printk("busy: %ld ms sleep: %ld ms\n", busy_msecs, sleep_msecs);
+
+	/* put to sleep for a certain period */
+	wait_event_freezable_timeout(kbinmanager_wait, kthread_should_stop(),
+			msecs_to_jiffies(sleep_msecs));
 }
 
-static void kbinmanager_wait_work(void)
+static void kbinmanager_wait_scan_period(unsigned long msecs)
 {
 	/* put to sleep for a certain period */
 	wait_event_freezable_timeout(kbinmanager_wait, kthread_should_stop(),
-			msecs_to_jiffies(kbinmanager_scan_sleep_msecs));
-	return;
+			msecs_to_jiffies(msecs));
+}
+
+static struct mm_struct *ohp_next_scan_candidate(unsigned long curr_tstamp)
+{
+	struct mm_struct *mm, *mm_candidate = NULL;
+
+	spin_lock(&ohp_mm_lock);
+	/* Select the mm with least scan timestamp. */
+	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
+		if (mm->ohp.tstamp < curr_tstamp) {
+			mm_candidate = mm;
+			break;
+		}
+	}
+	spin_unlock(&ohp_mm_lock);
+
+	return mm_candidate;
+}
+
+static void kbinmanager_do_scan(unsigned long *idle_msecs)
+{
+	static unsigned long curr_tstamp = 0;
+	struct mm_struct *mm = NULL;
+
+	/* First, update the current timestamp. */
+	curr_tstamp += 1;
+
+	/*
+	 * Now, scan and adjust every mm whose timestamp is
+	 * less than the current iteration.
+	 */
+	while (true) {
+		mm = ohp_next_scan_candidate(curr_tstamp);
+		if (!mm)
+			break;
+
+		ohp_clear_pte_accessed_mm(mm);
+		kbinmanager_wait_scan_period(1000);
+		*idle_msecs += 1000;
+		ohp_adjust_mm_bins(mm);
+		mm->ohp.tstamp = curr_tstamp;
+	}
 }
 
 /*
@@ -517,12 +587,18 @@ static void kbinmanager_wait_work(void)
  */
 static int kbinmanager(void *none)
 {
+	struct timeval start, end;
+	unsigned long idle_msecs, busy_msecs;
+
 	set_freezable();
 	set_user_nice(current, MAX_NICE);
 
 	while (!kthread_should_stop()) {
-		kbinmanager_do_scan();
-		kbinmanager_wait_work();
+		idle_msecs = 0;
+		do_gettimeofday(&start);
+		kbinmanager_do_scan(&idle_msecs);
+		do_gettimeofday(&end);
+		kbinmanager_wait_cpu_bound(busy_msecs, idle_msecs);
 	}
 
 	return 0;
@@ -831,6 +907,7 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 	}
 	index = 1 - index;
 	mm->ohp.current_scan_idx = index;
+	mm->ohp.nr_scans += 1;
 	mutex_unlock(&mm->ohp.lock);
 }
 EXPORT_SYMBOL(ohp_adjust_mm_bins);

@@ -27,7 +27,6 @@
 #include <linux/hashtable.h>
 #include <linux/userfaultfd_k.h>
 #include <linux/page_idle.h>
-#include <linux/time.h>
 
 #include <asm/tlb.h>
 #include <asm/pgalloc.h>
@@ -2863,7 +2862,6 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 		 * 2 - semaphore has been released and promotion succeded.
 		 */
 		ret = khugepaged_scan_pmd(mm, vma, address, hpage);
-
 		/* mmap sem already released. */
 		if (ret == 2) {
 			progress += HPAGE_PMD_NR;
@@ -3039,8 +3037,9 @@ static void khugepaged_promote_mm(struct mm_struct *mm)
 			pass_through_head++;
 		if (khugepaged_has_work() && pass_through_head < 2) {
 			ret = ohp_scan_mm(mm, pages-progress, &hpage);
-			if (ret != OHP_NO_WORK)
+			if (ret != OHP_NO_WORK) {
 				progress += ret;
+			}
 			else {
 				/*
 				 * If there is no work to be done, we can
@@ -3062,22 +3061,6 @@ static void khugepaged_promote_mm(struct mm_struct *mm)
 
 	if (!IS_ERR_OR_NULL(hpage))
 		put_page(hpage);
-}
-
-static void khugepaged_wait_work(void)
-{
-	if (khugepaged_has_work()) {
-		if (!khugepaged_scan_sleep_millisecs)
-			return;
-
-		wait_event_freezable_timeout(khugepaged_wait,
-					     kthread_should_stop(),
-			msecs_to_jiffies(khugepaged_scan_sleep_millisecs));
-		return;
-	}
-
-	if (khugepaged_enabled())
-		wait_event_freezable(khugepaged_wait, khugepaged_wait_event());
 }
 
 static void ohp_sleep_iteration(unsigned long busy_msecs,
@@ -3108,34 +3091,12 @@ static void ohp_sleep_iteration(unsigned long busy_msecs,
 					(unsigned long)idle_msecs);
 }
 
-/*
- * After clearing the page table accessed bit, we give some time
- * to the application to access the pages. Ideally, this should not
- * be too big.
- */
-static void ohp_wait_scan_period(unsigned long msecs)
-{
-	wait_event_freezable_timeout(khugepaged_wait,
-			kthread_should_stop(), msecs_to_jiffies(msecs));
-}
-
-static inline unsigned long
-get_time_difference(struct timeval *t0, struct timeval *t1)
-{
-	unsigned long msecs;
-
-	msecs = (t1->tv_sec - t0->tv_sec) * 1000 +
-			(t1->tv_usec - t0->tv_usec) / 1000;
-	return msecs;
-}
-
 static int khugepaged(void *none)
 {
 	struct mm_slot *mm_slot;
 	struct mm_struct *mm;
 	struct timeval t0, t1;
-	unsigned long nr_priority;
-	unsigned long promotion_msecs = 0, scan_msecs = 0, wait_msecs = 0;
+	unsigned long promotion_msecs = 0, wait_msecs = 0;
 
 	set_freezable();
 	set_user_nice(current, MAX_NICE);
@@ -3146,47 +3107,14 @@ static int khugepaged(void *none)
 		if (!mm)
 			goto do_wait;
 
-		wait_msecs = 0;
-		scan_msecs = 0;
-		/*
-		 * Check if high priority promotions are pending.
-		 * If yes, we can simply skip scanning for now and
-		 * promote the pending promotions first.
-		 */
-		nr_priority = ohp_mm_priority_promotions(mm);
-		if (nr_priority * HPAGE_PMD_NR >= khugepaged_pages_to_scan)
-			goto do_promote;
-
 		do_gettimeofday(&t0);
-scan_mm:
-		/* clear pte access bits of the target mm */
-		ohp_clear_pte_accessed_mm(mm);
-		/* sleep for certain period. */
-		wait_msecs += 1000;
-		ohp_wait_scan_period(1000);
-		/* adjust the position of each potential huge page region. */
-		ohp_adjust_mm_bins(mm);
-		mm->ohp.nr_scans += 1;
-		/* Scan mm atleast 3 times before promoting any region. */
-		if (mm->ohp.nr_scans < 4) {
-			wait_msecs += 2000;
-			ohp_wait_scan_period(2000);
-			goto scan_mm;
-		}
-		do_gettimeofday(&t1);
-		scan_msecs = get_time_difference(&t0, &t1) - wait_msecs;
-do_promote:
-		do_gettimeofday(&t0);
-		/* Do the actual huge page promotion of active regions. */
 		khugepaged_promote_mm(mm);
 		do_gettimeofday(&t1);
 		promotion_msecs = get_time_difference(&t0, &t1);
-		trace_printk("Scan: %ldms Promote: %ldms Pending: %ld Invalid: %ld\n",
-			scan_msecs, promotion_msecs, mm->ohp.ohp_remaining,
-							mm->ohp.invalid);
+		//trace_printk("khugepaged: Promotion Time: %ld msecs\n",
+		//		promotion_msecs);
 do_wait:
 		/* Give khugepaged a break. */
-		//khugepaged_wait_work();
 		ohp_sleep_iteration(promotion_msecs, wait_msecs);
 	}
 

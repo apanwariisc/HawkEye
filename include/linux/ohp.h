@@ -1,4 +1,5 @@
 #include <linux/khugepaged.h>
+#include <linux/time.h>
 
 extern struct mm_struct *ohp_get_target_mm(void);
 extern void ohp_clear_pte_accessed_mm(struct mm_struct *mm);
@@ -13,6 +14,7 @@ extern struct ohp_addr *get_ohp_mm_addr(struct mm_struct *mm_struct);
 extern void ohp_putback_kaddr(struct mm_struct *mm, struct ohp_addr *kaddr);
 extern unsigned long ohp_mm_pending_promotions(struct mm_struct *mm);
 extern unsigned long ohp_mm_priority_promotions(struct mm_struct *mm);
+extern unsigned long get_time_difference(struct timeval *t0, struct timeval *t1);
 int start_kbinmanager(void);
 void stop_kbinmanager(void);
 
