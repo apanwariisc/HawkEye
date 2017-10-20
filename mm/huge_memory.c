@@ -58,6 +58,7 @@ static atomic_t thp_collapse_alloc;
 static unsigned int khugepaged_pages_collapsed;
 static unsigned int khugepaged_full_scans;
 static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
+static unsigned int khugepaged_max_cpu __read_mostly = 0;
 /* during fragmentation poll the hugepage allocator once every minute */
 static unsigned int khugepaged_alloc_sleep_millisecs __read_mostly = 0;
 static struct task_struct *khugepaged_thread __read_mostly;
@@ -436,6 +437,29 @@ static struct kobj_attribute scan_sleep_millisecs_attr =
 	__ATTR(scan_sleep_millisecs, 0644, scan_sleep_millisecs_show,
 	       scan_sleep_millisecs_store);
 
+static ssize_t max_cpu_show(struct kobject *kobj, struct kobj_attribute *attr,
+								 char *buf)
+{
+	return sprintf(buf, "%u\n", khugepaged_max_cpu);
+}
+
+static ssize_t max_cpu_store(struct kobject *kobj, struct kobj_attribute *attr,
+					const char *buf, size_t count)
+{
+	unsigned long cpu;
+	int err;
+
+	err = kstrtoul(buf, 10, &cpu);
+	if (err || cpu < 0 || cpu > 100)
+		return -EINVAL;
+
+	khugepaged_max_cpu = cpu;
+	return count;
+}
+
+static struct kobj_attribute max_cpu_attr =
+	__ATTR(max_cpu, 0644, max_cpu_show, max_cpu_store);
+
 static ssize_t alloc_sleep_millisecs_show(struct kobject *kobj,
 					  struct kobj_attribute *attr,
 					  char *buf)
@@ -593,6 +617,7 @@ static struct attribute *khugepaged_attr[] = {
 	&scan_sleep_millisecs_attr.attr,
 	&alloc_sleep_millisecs_attr.attr,
 	&max_thp_collapse_alloc_attr.attr,
+	&max_cpu_attr.attr,
 	NULL,
 };
 
@@ -3007,12 +3032,6 @@ static int khugepaged_has_work(void)
 	return ohp_has_work();
 }
 
-static int khugepaged_wait_event(void)
-{
-	return !list_empty(&khugepaged_scan.mm_head) ||
-		kthread_should_stop();
-}
-
 static void khugepaged_promote_mm(struct mm_struct *mm)
 {
 	struct page *hpage = NULL;
@@ -3068,27 +3087,21 @@ static void ohp_sleep_iteration(unsigned long busy_msecs,
 {
 	long idle_msecs;
 
-#if 0
-	/* Sleep accordingly to restrict CPU utilization to 5%. */
-	idle_msecs = (busy_msecs * 100)/5;
-	/*
-	 * We already sleep sleep_msecs before reaching here every time.
-	 * Compensate it here but bound the mininum time to atleast 1 second.
-	 */
-	idle_msecs -= sleep_msecs;
-	if (idle_msecs < 1000)
-		idle_msecs = 1000;
-#endif
-	idle_msecs = busy_msecs * 19;
-	if (idle_msecs < 100)
-		idle_msecs = 100;
-#if 0
-	wait_event_freezable_timeout(khugepaged_wait,
+	/* Check if khugepaged is bounded by the cpu utilization. */
+	if (khugepaged_max_cpu == 0) {
+		wait_event_freezable_timeout(khugepaged_wait,
 			kthread_should_stop(),
 			msecs_to_jiffies(khugepaged_scan_sleep_millisecs));
-#endif
+		return;
+	}
+	/* Adjust sleep interval. */
+	idle_msecs = (busy_msecs * 100) / khugepaged_max_cpu;
+	/* Sleep for atlest 100 ms. */
+	if (idle_msecs < 100)
+		idle_msecs = 100;
+
 	wait_event_freezable_timeout(khugepaged_wait, kthread_should_stop(),
-					(unsigned long)idle_msecs);
+				msecs_to_jiffies((unsigned long)idle_msecs));
 }
 
 static int khugepaged(void *none)
