@@ -174,18 +174,25 @@ unsigned long ohp_mm_pending_promotions(struct mm_struct *mm)
 	 * mm should have enough promotions pending for the
 	 * atleat 1 khugepaged iteration.
 	 */
-	return remaining > 7 ? 1 : 0;
+	return remaining >= 8 ? remaining : 0;
 }
 EXPORT_SYMBOL(ohp_mm_pending_promotions);
 
-static inline unsigned long mm_ohp_weight(struct mm_struct *mm)
+#define TLB_OVERHEAD_ONLY	0
+static inline
+unsigned long mm_ohp_weight(struct mm_struct *mm, unsigned int metric)
 {
+	unsigned long pending = 0;
 	unsigned long weight = 0;
 
 	mutex_lock(&mm->ohp.lock);
-	if (ohp_mm_pending_promotions(mm))
-		weight = ((mm->ohp.ohp_weight * 10000) /
-					mm->ohp.ohp_remaining);
+	pending = ohp_mm_pending_promotions(mm);
+	if (pending) {
+		if (metric == TLB_OVERHEAD_ONLY)
+			weight = mm->ohp.ohp_weight;
+		else
+			weight = ((mm->ohp.ohp_weight * 10000)/pending);
+	}
 	mutex_unlock(&mm->ohp.lock);
 
 	return weight;
@@ -196,14 +203,14 @@ static inline unsigned long mm_ohp_weight(struct mm_struct *mm)
  * participating in ohp framework and select the process
  * with the highest weight.
  */
-struct mm_struct *ohp_get_target_mm(void)
+struct mm_struct *ohp_get_target_mm(unsigned int metric)
 {
 	struct mm_struct *mm = NULL, *best_mm = NULL;
 	unsigned long weight, best_weight = 0;
 
 	spin_lock(&ohp_mm_lock);
 	list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
-		weight = mm_ohp_weight(mm);
+		weight = mm_ohp_weight(mm, metric);
 		if (weight > best_weight) {
 			best_mm = mm;
 			best_weight = weight;
@@ -214,6 +221,8 @@ struct mm_struct *ohp_get_target_mm(void)
 }
 EXPORT_SYMBOL(ohp_get_target_mm);
 
+/* This is no longer being used. */
+#if 0
 /*
  * Get the next huge page candidate.
  */
@@ -261,6 +270,7 @@ out:
 	mutex_unlock(&mm->ohp.lock);
 	return address;
 }
+#endif
 
 /*
  * Get the next huge page candidate for a specific mm.

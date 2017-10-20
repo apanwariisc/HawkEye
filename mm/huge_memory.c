@@ -59,6 +59,11 @@ static unsigned int khugepaged_pages_collapsed;
 static unsigned int khugepaged_full_scans;
 static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
 static unsigned int khugepaged_max_cpu __read_mostly = 0;
+/*
+ * 0 - TLB overhead per pending promotion (Default).
+ * 1 - TLB overhead only.
+ */
+static unsigned int khugepaged_promotion_metric __read_mostly = 0;
 /* during fragmentation poll the hugepage allocator once every minute */
 static unsigned int khugepaged_alloc_sleep_millisecs __read_mostly = 0;
 static struct task_struct *khugepaged_thread __read_mostly;
@@ -460,6 +465,30 @@ static ssize_t max_cpu_store(struct kobject *kobj, struct kobj_attribute *attr,
 static struct kobj_attribute max_cpu_attr =
 	__ATTR(max_cpu, 0644, max_cpu_show, max_cpu_store);
 
+static ssize_t promotion_metric_show(struct kobject *kobj,
+			struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%u\n", khugepaged_promotion_metric);
+}
+
+static ssize_t promotion_metric_store(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long metric;
+	int err;
+
+	err = kstrtoul(buf, 10, &metric);
+	if (err || metric < 0 || metric > 1)
+		return -EINVAL;
+
+	khugepaged_promotion_metric = metric;
+	return count;
+}
+
+static struct kobj_attribute promotion_metric_attr =
+	__ATTR(promotion_metric, 0644, promotion_metric_show, promotion_metric_store);
+
+
 static ssize_t alloc_sleep_millisecs_show(struct kobject *kobj,
 					  struct kobj_attribute *attr,
 					  char *buf)
@@ -618,6 +647,7 @@ static struct attribute *khugepaged_attr[] = {
 	&alloc_sleep_millisecs_attr.attr,
 	&max_thp_collapse_alloc_attr.attr,
 	&max_cpu_attr.attr,
+	&promotion_metric_attr.attr,
 	NULL,
 };
 
@@ -3116,7 +3146,7 @@ static int khugepaged(void *none)
 
 	while (!kthread_should_stop()) {
 		/* select target mm */
-		mm = ohp_get_target_mm();
+		mm = ohp_get_target_mm(khugepaged_promotion_metric);
 		if (!mm)
 			goto do_wait;
 

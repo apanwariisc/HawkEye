@@ -1,7 +1,7 @@
 #include <linux/khugepaged.h>
 #include <linux/time.h>
 
-extern struct mm_struct *ohp_get_target_mm(void);
+extern struct mm_struct *ohp_get_target_mm(unsigned int);
 extern void ohp_clear_pte_accessed_mm(struct mm_struct *mm);
 extern void ohp_adjust_mm_bins(struct mm_struct *mm);
 extern void ohp_exit_mm(struct mm_struct *mm);
