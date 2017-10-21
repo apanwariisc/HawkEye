@@ -2873,7 +2873,7 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 	 * Each iteration will acquire and release the mmap semaphore
 	 * independently. This may look messy but keeps the code simple.
 	 */
-	while (progress < pages && failed < 3) {
+	while (progress < pages && failed < 100) {
 		kaddr = get_ohp_mm_addr(mm);
 		if (!kaddr)
 			return OHP_NO_WORK;
@@ -2913,7 +2913,8 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 		/* promote into a huge page.
 		 * Total two return values are possible.
 		 * 0 - semaphore must be released.
-		 * 1 - semaphore has been released but promotion failed.
+		 * 1 - semaphore has been released but promotion failed
+		 *     due to huge page allocation failure.
 		 * 2 - semaphore has been released and promotion succeded.
 		 */
 		ret = khugepaged_scan_pmd(mm, vma, address, hpage);
@@ -2923,7 +2924,7 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 			kfree(kaddr);
 		}
 		else if (ret == 1) {
-			failed += 1;
+			failed += 100;
 			ohp_putback_kaddr(mm, kaddr);
 			count_vm_event(OHP_PROMOTE_FAILED);
 		}
