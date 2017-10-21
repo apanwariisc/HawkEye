@@ -323,6 +323,7 @@ void ohp_putback_kaddr(struct mm_struct *mm, struct ohp_addr *kaddr)
 	list_add_tail(&kaddr->entry, &mm->ohp.priority[pos]);
 	mm->ohp.count[pos] += 1;
 	mm->ohp.ohp_remaining += 1;
+	nr_ohp_bins += 1;
 	mutex_unlock(&mm->ohp.lock);
 }
 
