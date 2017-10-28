@@ -315,11 +315,9 @@ out:
 
 void ohp_putback_kaddr(struct mm_struct *mm, struct ohp_addr *kaddr)
 {
-	int pos;
+	int pos = 0;
 
 	mutex_lock(&mm->ohp.lock);
-	/* put back on the to be scanned list */
-	pos = 1 - mm->ohp.current_scan_idx;
 	list_add_tail(&kaddr->entry, &mm->ohp.priority[pos]);
 	mm->ohp.count[pos] += 1;
 	mm->ohp.ohp_remaining += 1;
@@ -366,7 +364,7 @@ void remove_ohp_bins(struct vm_area_struct *vma)
 int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 {
 	struct ohp_addr *kaddr;
-	unsigned int index;
+	unsigned int index = 0;
 
 	if (!mm)
 		return 0;
@@ -394,8 +392,7 @@ int add_ohp_bin(struct mm_struct *mm, unsigned long addr)
 	kaddr->mm = mm;
 
 	mutex_lock(&mm->ohp.lock);
-	index = mm->ohp.current_scan_idx;
-	list_add_tail(&kaddr->entry, &mm->ohp.priority[!(!index)]);
+	list_add_tail(&kaddr->entry, &mm->ohp.priority[index]);
 	mm->ohp.count[index] += 1;
 	mm->ohp.ohp_remaining += 1;
 	nr_ohp_bins += 1;
@@ -758,16 +755,14 @@ void ohp_clear_pte_accessed_range(struct mm_struct *mm, unsigned long start)
 
 void ohp_clear_pte_accessed_mm(struct mm_struct *mm)
 {
-	unsigned int index;
+	int index;
 	struct ohp_addr *kaddr;
-	/*
-	 * Identify the list to be scanned and clear accessed bit of each base
-	 * page.
-	 */
+
 	mutex_lock(&mm->ohp.lock);
-	index = mm->ohp.current_scan_idx;
-	list_for_each_entry(kaddr, &mm->ohp.priority[index], entry)
-		ohp_clear_pte_accessed_range(mm, kaddr->address);
+	for (index = MAX_BINS-1; index >= 0; index--) {
+		list_for_each_entry(kaddr, &mm->ohp.priority[index], entry)
+			ohp_clear_pte_accessed_range(mm, kaddr->address);
+	}
 	mutex_unlock(&mm->ohp.lock);
 }
 EXPORT_SYMBOL(ohp_clear_pte_accessed_mm);
@@ -851,61 +846,44 @@ void ohp_adjust_mm_bins(struct mm_struct *mm)
 
 	/* TODO: Optimize locking behavior. */
 	mutex_lock(&mm->ohp.lock);
-	index = mm->ohp.current_scan_idx;
-	list_for_each_entry_safe(kaddr, tmp, &mm->ohp.priority[index], entry) {
-		nr_accessed = ohp_nr_accessed(mm, kaddr->address);
-		/* Remove invalid addressed first. */
-		if (nr_accessed < 0) {
+	mm->ohp.nr_scans += 1;
+	for (index = MAX_BINS - 1; index >=0; index--) {
+		list_for_each_entry_safe(kaddr, tmp,
+				&mm->ohp.priority[index], entry) {
 			/*
-			 * We treat this to be an error and discard this from
-			 * further considerations.
+			 * Don't traverse a single huge page more than once
+			 * in one iteration.
 			 */
-			list_del(&kaddr->entry);
-			mm->ohp.ohp_remaining -= 1;
-			mm->ohp.count[index] -= 1;
-			mm->ohp.invalid += 1;
-			nr_ohp_bins -= 1;
-			kfree(kaddr);
-			continue;
-		}
+			if (kaddr->nr_scans == mm->ohp.nr_scans)
+				continue;
 
-		kaddr->nr_scans += 1;
-		update_kaddr_weight(kaddr, nr_accessed);
-		/* Make sure we do not put it back on the current scan list. */
-		if (kaddr->nr_scans < 3 ||
-			order_base_2(kaddr->weight) == index)
-			new_index = 1 - index;
-		else
+			nr_accessed = ohp_nr_accessed(mm, kaddr->address);
+			/* Remove invalid addressed first. */
+			if (nr_accessed < 0) {
+				/*
+				 * We treat this to be an error and discard this from
+				 * further considerations.
+				 */
+				list_del(&kaddr->entry);
+				mm->ohp.ohp_remaining -= 1;
+				mm->ohp.count[index] -= 1;
+				mm->ohp.invalid += 1;
+				nr_ohp_bins -= 1;
+				kfree(kaddr);
+				continue;
+			}
+
+			kaddr->nr_scans = mm->ohp.nr_scans;
+			update_kaddr_weight(kaddr, nr_accessed);
 			new_index = order_base_2(kaddr->weight);
 
-#if 0
-		/* First 3 scans are used to indentify hot regions. */
-		if (mm->ohp.nr_scans < 3)
-			continue;
-		else {
-			/*
-			 * Less than 32 references and we put the region onto
-			 * the scan list to give it another chance. Note that
-			 * the first 2 lists are scanning lists used to hold
-			 * relatively inactive regions and hence addition of 2.
-			 */
-			if (new_index < 2)
-				new_index = 1 - index;
-			else
-				new_index = 2 + new_index;
+			/* Validate the new index of the current huge page region. */
+			VM_BUG_ON(new_index >= MAX_BINS);
+			list_move(&kaddr->entry, &mm->ohp.priority[new_index]);
+			mm->ohp.count[index] -= 1;
+			mm->ohp.count[new_index] += 1;
 		}
-#endif
-
-		/* Validate the new index of the current huge page region. */
-		VM_BUG_ON(new_index >= MAX_BINS);
-		list_move(&kaddr->entry, &mm->ohp.priority[new_index]);
-		mm->ohp.count[index] -= 1;
-		mm->ohp.count[new_index] += 1;
 	}
-	/* Update the index to be scanned next. */
-	index = 1 - index;
-	mm->ohp.current_scan_idx = index;
-	mm->ohp.nr_scans += 1;
 	mutex_unlock(&mm->ohp.lock);
 }
 EXPORT_SYMBOL(ohp_adjust_mm_bins);
