@@ -313,6 +313,48 @@ out:
 	return kaddr;
 }
 
+struct ohp_addr *get_ohp_global_kaddr(struct mm_struct **src)
+{
+	struct mm_struct *mm = NULL;
+	struct ohp_addr *kaddr = NULL;
+	int index, ret = 0;
+
+	spin_lock(&ohp_mm_lock);
+	/* start from the topmost bin. */
+	for(index = MAX_BINS - 1; index > 0; index--) {
+		list_for_each_entry(mm, &ohp_scan.mm_head, ohp_list) {
+			/* Don't block or sleep on the lock. */
+			ret = mutex_trylock(&mm->ohp.lock);
+			if (!ret)
+				continue;
+			/* Select the next process if the list is empty. */
+			if (list_empty(&mm->ohp.priority[index])) {
+				mutex_unlock(&mm->ohp.lock);
+				continue;
+			}
+
+			kaddr = list_first_entry(&mm->ohp.priority[index],
+						struct ohp_addr, entry);
+			list_del(&kaddr->entry);
+			mm->ohp.count[index] -= 1;
+			mm->ohp.ohp_remaining -= 1;
+			nr_ohp_bins -= 1;
+			mutex_unlock(&mm->ohp.lock);
+			*src = mm;
+			/*
+			 * Put the current mm at the tail. This logic implements
+			 * the round-robin promotion policy.
+			 */
+			list_del(&mm->ohp_list);
+			list_add_tail(&mm->ohp_list, &ohp_scan.mm_head);
+			goto found;
+		}
+	}
+found:
+	spin_unlock(&ohp_mm_lock);
+	return kaddr;
+}
+
 void ohp_putback_kaddr(struct mm_struct *mm, struct ohp_addr *kaddr)
 {
 	int pos = 0;

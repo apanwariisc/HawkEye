@@ -478,7 +478,7 @@ static ssize_t promotion_metric_store(struct kobject *kobj,
 	int err;
 
 	err = kstrtoul(buf, 10, &metric);
-	if (err || metric < 0 || metric > 1)
+	if (err || metric < 0 || metric > 2)
 		return -EINVAL;
 
 	khugepaged_promotion_metric = metric;
@@ -2874,7 +2874,16 @@ static unsigned int ohp_scan_mm(struct mm_struct *mm,
 	 * independently. This may look messy but keeps the code simple.
 	 */
 	while (progress < pages && failed < 100) {
-		kaddr = get_ohp_mm_addr(mm);
+		/*
+		 * 0 - overhead only.
+		 * 1 - overhead per GB memory.
+		 * 2 - global, round-robin policy.
+		 */
+		if (khugepaged_promotion_metric < 2)
+			kaddr = get_ohp_mm_addr(mm);
+		else
+			kaddr = get_ohp_global_kaddr(&mm);
+
 		if (!kaddr)
 			return OHP_NO_WORK;
 
@@ -3138,7 +3147,7 @@ static void ohp_sleep_iteration(unsigned long busy_msecs,
 static int khugepaged(void *none)
 {
 	struct mm_slot *mm_slot;
-	struct mm_struct *mm;
+	struct mm_struct *mm = NULL;
 	struct timeval t0, t1;
 	unsigned long promotion_msecs = 0, wait_msecs = 0;
 
@@ -3146,10 +3155,17 @@ static int khugepaged(void *none)
 	set_user_nice(current, MAX_NICE);
 
 	while (!kthread_should_stop()) {
-		/* select target mm */
-		mm = ohp_get_target_mm(khugepaged_promotion_metric);
-		if (!mm)
-			goto do_wait;
+		/*
+		 * For a generic policy, we don't need to select the mm
+		 * apriori. It will be handled by ohp_scan_mm in the
+		 * round-robin fashion.
+		 */
+		if (khugepaged_promotion_metric < 2) {
+			/* select target mm */
+			mm = ohp_get_target_mm(khugepaged_promotion_metric);
+			if (!mm)
+				goto do_wait;
+		}
 
 		do_gettimeofday(&t0);
 		khugepaged_promote_mm(mm);
