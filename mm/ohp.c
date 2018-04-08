@@ -286,15 +286,16 @@ struct ohp_addr *get_ohp_mm_addr(struct mm_struct *mm)
 	mutex_lock(&mm->ohp.lock);
 
 	/* search backwards from high to low priority bins. */
-	for (i = MAX_BINS - 1; i > 1; i--) {
+	for (i = MAX_BINS - 1; i >= 0; i--) {
 		if (list_empty(&mm->ohp.priority[i]))
 			continue;
 		/* If we are here, we have found the next ohp candidate. */
 		goto found;
 	}
 
-	if (list_empty(&mm->ohp.priority[i]))
-		goto out;
+	//if (i <= 0 || list_empty(&mm->ohp.priority[i]))
+	/* If we are here, we didn't find anything. */
+	goto out;
 
 found:
 	kaddr = list_first_entry(&mm->ohp.priority[i],

@@ -59,6 +59,7 @@ static unsigned int khugepaged_pages_collapsed;
 static unsigned int khugepaged_full_scans;
 static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
 static unsigned int khugepaged_max_cpu __read_mostly = 0;
+static unsigned int khugepaged_min_sleep __read_mostly = 0;
 /*
  * 0 - TLB overhead per pending promotion (Default).
  * 1 - TLB overhead only.
@@ -465,6 +466,30 @@ static ssize_t max_cpu_store(struct kobject *kobj, struct kobj_attribute *attr,
 static struct kobj_attribute max_cpu_attr =
 	__ATTR(max_cpu, 0644, max_cpu_show, max_cpu_store);
 
+static ssize_t min_sleep_show(struct kobject *kobj, struct kobj_attribute *attr,
+								 char *buf)
+{
+	return sprintf(buf, "%u\n", khugepaged_min_sleep);
+}
+
+static ssize_t min_sleep_store(struct kobject *kobj, struct kobj_attribute *attr,
+					const char *buf, size_t count)
+{
+	unsigned long cpu;
+	int err;
+
+	err = kstrtoul(buf, 10, &cpu);
+	if (err || cpu < 0 || cpu > 100)
+		return -EINVAL;
+
+	khugepaged_min_sleep = cpu;
+	return count;
+}
+
+static struct kobj_attribute min_sleep_attr =
+	__ATTR(min_sleep, 0644, min_sleep_show, min_sleep_store);
+
+
 static ssize_t promotion_metric_show(struct kobject *kobj,
 			struct kobj_attribute *attr, char *buf)
 {
@@ -647,6 +672,7 @@ static struct attribute *khugepaged_attr[] = {
 	&alloc_sleep_millisecs_attr.attr,
 	&max_thp_collapse_alloc_attr.attr,
 	&max_cpu_attr.attr,
+	&min_sleep_attr.attr,
 	&promotion_metric_attr.attr,
 	NULL,
 };
@@ -3136,9 +3162,10 @@ static void ohp_sleep_iteration(unsigned long busy_msecs,
 	}
 	/* Adjust sleep interval. */
 	idle_msecs = (busy_msecs * 100) / khugepaged_max_cpu;
-	/* Sleep for atlest 100 ms. */
-	if (idle_msecs < 100)
-		idle_msecs = 100;
+
+	/* Sleep for atlest the user provided time period.*/
+	if (idle_msecs < khugepaged_min_sleep)
+		idle_msecs = khugepaged_min_sleep;
 
 	wait_event_freezable_timeout(khugepaged_wait, kthread_should_stop(),
 				msecs_to_jiffies((unsigned long)idle_msecs));
