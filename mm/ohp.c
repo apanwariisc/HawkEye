@@ -195,6 +195,7 @@ unsigned long mm_ohp_weight(struct mm_struct *mm, unsigned int metric)
 	}
 	mutex_unlock(&mm->ohp.lock);
 
+	//return weight > 2 ? weight : 0;
 	return weight;
 }
 
@@ -216,6 +217,13 @@ struct mm_struct *ohp_get_target_mm(unsigned int metric)
 			best_weight = weight;
 		}
 	}
+	/*
+	 * Shift best mm to the tail of this list. This is to ensure
+	 * that promotions happen in round-robin fashion when two
+	 * or more processes have similar weight.
+	 */
+	if (best_mm)
+		list_move_tail(&best_mm->ohp_list, &ohp_scan.mm_head);
 	spin_unlock(&ohp_mm_lock);
 	return best_mm;
 }
