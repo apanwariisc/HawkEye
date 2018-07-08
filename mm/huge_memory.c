@@ -3368,3 +3368,10 @@ void vma_adjust_trans_huge(struct vm_area_struct *vma,
 			split_huge_page_address(next->vm_mm, nstart);
 	}
 }
+
+struct page *follow_page_custom(struct vm_area_struct *vma,
+                unsigned long addr, unsigned int foll_flags)
+{
+	return follow_page(vma, addr, foll_flags);
+}
+EXPORT_SYMBOL(follow_page_custom);
