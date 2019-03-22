@@ -3,9 +3,13 @@ The implementation of HawkEye, our research system:
 published in Architectural Support for Programming Languages and Operating Systems (ASPLOS) 2019.
 
 
-This kernel relies on a user-space tool to periodically update the TLB miss processing overhead (aka MMU overhead) of running processes. A special purpose system call "update_mm_ohp_stats" is provided for the user-space to update this. The MMU overhead can be easily calculated on x86 with hardware performance counters using tools like perf. A sample tool that was used in our design is hosted as the following
-repo:
+This kernel relies on a user-space tool to periodically update the TLB miss processing overhead (aka MMU overhead) of running processes. A special purpose system call "update_mm_ohp_stats" is provided for the user-space to update this. The MMU overhead can be easily calculated on x86 with hardware performance counters using tools like perf. A sample tool that was used in our design is hosted as the following repo:
 https://github.com/apanwariisc/x86-MMU-Profiler
+
+Page fault latency (as discussed in the paper) can be measured using ftrace. A sample C code
+to automate simple page fault latency tracking is hosted as the following repo:
+https://github.com/apanwariisc/ftrace-pgfault-latency-tracker
+
 
 More details on using the HawkEye system will be updated shortly.
 
