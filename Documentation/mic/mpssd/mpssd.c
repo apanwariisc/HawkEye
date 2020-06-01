@@ -33,6 +33,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <linux/virtio_ring.h>
 #include <linux/virtio_net.h>
 #include <linux/virtio_console.h>
@@ -76,6 +77,11 @@ static struct mic_info mic_list;
 #ifndef VIRTIO_NET_HDR_F_DATA_VALID
 #define VIRTIO_NET_HDR_F_DATA_VALID	2	/* Csum is valid */
 #endif
+
+#define __uint16_identity(x) (x)
+#define __uint64_identity(x) (x)
+#define __uint32_identity(x) (x)
+
 
 static struct {
 	struct mic_device_desc dd;
