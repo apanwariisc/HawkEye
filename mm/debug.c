@@ -36,6 +36,7 @@ static const struct trace_print_flags pageflag_names[] = {
 	{1UL << PG_reclaim,		"reclaim"	},
 	{1UL << PG_swapbacked,		"swapbacked"	},
 	{1UL << PG_unevictable,		"unevictable"	},
+	{1UL << PG_zeroed,		"zero-filled"	},
 #ifdef CONFIG_MMU
 	{1UL << PG_mlocked,		"mlocked"	},
 #endif

@@ -849,8 +849,8 @@ static int __do_huge_pmd_anonymous_page(struct mm_struct *mm,
 		put_page(page);
 		return VM_FAULT_OOM;
 	}
-
-	clear_huge_page(page, haddr, HPAGE_PMD_NR);
+	if(!PageZeroed(page))
+		clear_huge_page(page, haddr, HPAGE_PMD_NR);
 	/*
 	 * The memory barrier inside __SetPageUptodate makes sure that
 	 * clear_huge_page writes become visible before the set_pmd_at()
