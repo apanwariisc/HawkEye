@@ -656,7 +656,7 @@ static inline void __free_one_page(struct page *page,
 	unsigned long combined_idx;
 	unsigned long uninitialized_var(buddy_idx);
 	struct page *buddy;
-	int max_order = MAX_ORDER;
+	int i, max_order = MAX_ORDER;
 
 	VM_BUG_ON(!zone_is_initialized(zone));
 	VM_BUG_ON_PAGE(page->flags & PAGE_FLAGS_CHECK_AT_PREP, page);
@@ -678,6 +678,9 @@ static inline void __free_one_page(struct page *page,
 
 	VM_BUG_ON_PAGE(page_idx & ((1 << order) - 1), page);
 	VM_BUG_ON_PAGE(bad_range(zone, page), page);
+
+	for (i = 0; i < (1 << order); i++)
+		ClearPageZeroed(page + i);
 
 	while (order < max_order - 1) {
 		buddy_idx = __find_buddy_index(page_idx, order);
@@ -1359,7 +1362,8 @@ static int prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
 
 	if (gfp_flags & __GFP_ZERO)
 		for (i = 0; i < (1 << order); i++)
-			clear_highpage(page + i);
+			if (!PageZeroed(page + i))
+				clear_highpage(page + i);
 
 	if (order && (gfp_flags & __GFP_COMP))
 		prep_compound_page(page, order);
@@ -1948,6 +1952,7 @@ void free_hot_cold_page(struct page *page, bool cold)
 		migratetype = MIGRATE_MOVABLE;
 	}
 
+	ClearPageZeroed(page);
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
 	if (!cold)
 		list_add(&page->lru, &pcp->lists[migratetype]);

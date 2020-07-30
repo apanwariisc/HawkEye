@@ -3829,7 +3829,8 @@ void clear_huge_page(struct page *page,
 	might_sleep();
 	for (i = 0; i < pages_per_huge_page; i++) {
 		cond_resched();
-		clear_user_highpage(page + i, addr + i * PAGE_SIZE);
+		if (!PageZeroed(page + i))
+			clear_user_highpage(page + i, addr + i * PAGE_SIZE);
 	}
 }
 

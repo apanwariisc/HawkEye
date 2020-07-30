@@ -97,6 +97,7 @@ enum pageflags {
 	PG_reclaim,		/* To be reclaimed asap */
 	PG_swapbacked,		/* Page is backed by RAM/swap */
 	PG_unevictable,		/* Page is "unevictable"  */
+	PG_zeroed,
 #ifdef CONFIG_MMU
 	PG_mlocked,		/* Page is vma mlocked */
 #endif
@@ -652,9 +653,13 @@ static inline void ClearPageSlabPfmemalloc(struct page *page)
  *
  * __PG_HWPOISON is exceptional because it needs to be kept beyond page's
  * alloc-free cycle to prevent from reusing the page.
+ *
+ * The zeroed bit is also freed from the check here because it may or may not
+ * be zero at the time of allocation and we need to take appropriate action
+ * based on the state of zeroed bit.
  */
 #define PAGE_FLAGS_CHECK_AT_PREP	\
-	(((1 << NR_PAGEFLAGS) - 1) & ~__PG_HWPOISON)
+	(((1 << NR_PAGEFLAGS) - 1) & ~__PG_HWPOISON & ~(1UL << PG_zeroed))
 
 #define PAGE_FLAGS_PRIVATE				\
 	(1 << PG_private | 1 << PG_private_2)
@@ -670,6 +675,20 @@ static inline int page_has_private(struct page *page)
 	return !!(page->flags & PAGE_FLAGS_PRIVATE);
 }
 
+static inline int PageZeroed(struct page *page)
+{
+	return test_bit(PG_zeroed, &page->flags);
+}
+
+static inline void SetPageZeroed(struct page *page)
+{
+	set_bit(PG_zeroed, &page->flags);
+}
+
+static inline void ClearPageZeroed(struct page *page)
+{
+	clear_bit(PG_zeroed, &page->flags);
+}
 #endif /* !__GENERATING_BOUNDS_H */
 
 #endif	/* PAGE_FLAGS_H */
