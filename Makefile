@@ -1,7 +1,7 @@
 VERSION = 4
 PATCHLEVEL = 3
 SUBLEVEL = 0
-EXTRAVERSION =
+EXTRAVERSION = -HawkEye
 NAME = Blurry Fish Butt
 
 # *DOCUMENTATION*
@@ -390,7 +390,7 @@ KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
-		   -Wno-format-security \
+		   -Wno-format-security -fno-stack-protector\
 		   -std=gnu89
 
 KBUILD_AFLAGS_KERNEL :=
